@@ -244,6 +244,9 @@ class Pdf2VoiceApp(App):
 
     async def _run_pipeline(self, pdf_path: str, gender: str) -> None:
         from src.pipeline.extractor import count_pages, extract_pdf
+        from src.pipeline.session import (
+            BookSession, book_from_session, compute_pdf_hash, create_session,
+        )
         from src.pipeline.structurer import structure_content
         from src.pipeline.tts_engine import generate_audiobook
 
@@ -252,51 +255,107 @@ class Pdf2VoiceApp(App):
         chapters = self._chapters()
 
         try:
-            # ── Stage 0: PDF Extraction ──────────────────────────────
-            self._current_stage = 0
-            pipeline.mark_running(0)
-            log.info(f"Extracting PDF: {pdf_path}")
-
-            total_pages = await asyncio.get_event_loop().run_in_executor(
-                None, count_pages, pdf_path
+            # ── Hash the PDF (fast, enables session lookup) ─────────────
+            pdf_hash_str = await asyncio.get_event_loop().run_in_executor(
+                None, compute_pdf_hash, pdf_path
             )
-            log.info(f"Found: {total_pages} pages")
 
-            def _extract_cb(cur: int, tot: int) -> None:
-                self.call_from_thread(
-                    pipeline.set_stage_progress, 0,
-                    (cur / max(tot, 1)) * 100, f"{cur}/{tot}"
+            # ── Check for an existing session ──────────────────────────
+            existing = BookSession.load(pdf_hash_str)
+            resuming = (
+                existing is not None
+                and not existing.is_complete
+                and existing.gender == gender
+            )
+            if existing and existing.is_complete:
+                log.info("Session already complete — starting fresh.")
+                existing.delete()
+                existing = None
+            elif existing and existing.gender != gender:
+                log.warn(
+                    f"Existing session used gender '{existing.gender}' — "
+                    "gender changed, starting fresh."
                 )
+                existing.delete()
+                existing = None
 
-            markdown = await asyncio.get_event_loop().run_in_executor(
-                None, extract_pdf, pdf_path, _extract_cb
-            )
-            pipeline.mark_done(0)
-            log.success(f"PDF extracted ({len(markdown):,} characters)")
-            await self._check_cancel()
+            session: BookSession | None = None
 
-            # ── Stage 1: LLM Structuring ─────────────────────────────
-            self._current_stage = 1
-            pipeline.mark_running(1)
-            log.info(f"AI structuring content via {LLM_MODEL} ...")
+            if resuming and existing:
+                # ──────────────────────────────────────────────
+                # RESUME: stages 0+1 are fully skipped
+                # ──────────────────────────────────────────────
+                session = existing
+                book    = book_from_session(session)
+                done    = session.completed_count
+                total   = len(session.chapters)
+                log.info(
+                    f"Resuming \"{session.title}\" — "
+                    f"{done}/{total} chapters already done."
+                )
+                pipeline.mark_done(0)
+                pipeline.mark_done(1)
+                chapters.load_chapters([(ch.index, ch.title) for ch in book.chapters])
+                for ch in session.chapters:
+                    if ch.done:
+                        chapters.set_done(ch.index)
+                await self._check_cancel()
 
-            def _llm_log(msg: str) -> None:
-                self.call_from_thread(log.info, msg)
+            else:
+                # ──────────────────────────────────────────────
+                # FRESH RUN: stages 0 and 1 run as normal
+                # ──────────────────────────────────────────────
 
-            book = await asyncio.get_event_loop().run_in_executor(
-                None, structure_content, markdown, _llm_log
-            )
-            pipeline.mark_done(1)
-            log.success(
-                f"Structured: \"{book.title}\" — "
-                f"{len(book.chapters)} chapters, {book.total_chunks} chunks"
-            )
-            if book.genre:
-                log.info(f"Genre: {book.genre}")
-            log.info(f"Voice: {book.voice_instruct}")
+                # ── Stage 0: PDF Extraction ────────────────────────────
+                self._current_stage = 0
+                pipeline.mark_running(0)
+                log.info(f"Extracting PDF: {pdf_path}")
 
-            chapters.load_chapters([(ch.index, ch.title) for ch in book.chapters])
-            await self._check_cancel()
+                total_pages = await asyncio.get_event_loop().run_in_executor(
+                    None, count_pages, pdf_path
+                )
+                log.info(f"Found: {total_pages} pages")
+
+                def _extract_cb(cur: int, tot: int) -> None:
+                    self.call_from_thread(
+                        pipeline.set_stage_progress, 0,
+                        (cur / max(tot, 1)) * 100, f"{cur}/{tot}"
+                    )
+
+                markdown = await asyncio.get_event_loop().run_in_executor(
+                    None, extract_pdf, pdf_path, _extract_cb
+                )
+                pipeline.mark_done(0)
+                log.success(f"PDF extracted ({len(markdown):,} characters)")
+                await self._check_cancel()
+
+                # ── Stage 1: LLM Structuring ───────────────────────────
+                self._current_stage = 1
+                pipeline.mark_running(1)
+                log.info(f"AI structuring content via {LLM_MODEL} ...")
+
+                def _llm_log(msg: str) -> None:
+                    self.call_from_thread(log.info, msg)
+
+                book = await asyncio.get_event_loop().run_in_executor(
+                    None, structure_content, markdown, _llm_log
+                )
+                pipeline.mark_done(1)
+                log.success(
+                    f"Structured: \"{book.title}\" — "
+                    f"{len(book.chapters)} chapters, {book.total_chunks} chunks"
+                )
+                if book.genre:
+                    log.info(f"Genre: {book.genre}")
+                log.info(f"Voice: {book.voice_instruct}")
+
+                chapters.load_chapters([(ch.index, ch.title) for ch in book.chapters])
+                await self._check_cancel()
+
+                # Save session right after structuring so TTS can resume later
+                session = create_session(book, pdf_hash_str, pdf_path, gender)
+                session.save()
+                log.info("Session saved — generation can be resumed if interrupted.")
 
             # ── Stage 2: Voice Anker (VoiceDesign) ───────────────────
             self._current_stage = 2
@@ -337,6 +396,7 @@ class Pdf2VoiceApp(App):
                 _anchor_cb_with_switch,
                 _content_cb,
                 _is_cancelled,
+                session,
             )
 
             for ch in book.chapters:

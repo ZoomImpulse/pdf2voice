@@ -16,6 +16,7 @@ from src.config import (
     TTS_VOICE_INSTRUCT,
 )
 from src.pipeline.structurer import StructuredBook
+from src.pipeline.session import BookSession
 
 ChunkCallback = Callable[[int, int, int, int], None]
 
@@ -42,22 +43,46 @@ def generate_audiobook(
     anchor_cb: Callable[[float], None] | None = None,
     content_cb: ChunkCallback | None = None,
     cancelled: Callable[[], bool] | None = None,
+    session: BookSession | None = None,
 ) -> tuple[list[Path], Path | None]:
     """Two-phase audiobook generation for consistent voice throughout.
 
     Phase 1 — VoiceDesign: generates a short voice anchor clip.
     Phase 2 — Base:        clones the anchor voice for all content chunks.
 
+    Pass a BookSession to enable resume: completed chapters are skipped and
+    progress is persisted after every chapter so the run can be interrupted
+    and continued later.
+
     Returns (chapter_paths, final_merged_path).
     """
-    device       = _resolve_device(log_cb)
+    device         = _resolve_device(log_cb)
     voice_instruct = _gender_instruction(book.voice_instruct or TTS_VOICE_INSTRUCT, gender)
-    safe_title   = _safe_filename(book.title)
+    safe_title     = _safe_filename(book.title)
+
+    # ── Persistent anchor path (reused across sessions) ───────────────
+    persist_anchor = (
+        OUTPUT_DIR / f".voice_anchor_{session.pdf_hash}.wav"
+        if session else OUTPUT_DIR / ".voice_anchor.wav"
+    )
 
     # ── Phase 1: Voice anchor ─────────────────────────────────────────
-    anchor_path = _generate_anchor(voice_instruct, book.language, device, log_cb, anchor_cb, cancelled)
-    if anchor_path is None:
-        return [], None
+    if session and session.anchor_available():
+        anchor_path: Path | None = Path(session.anchor_path)  # type: ignore[arg-type]
+        if log_cb:
+            log_cb(f"Voice Anchor: Reusing saved anchor ({anchor_path.name})")
+        if anchor_cb:
+            anchor_cb(100.0)
+    else:
+        anchor_path = _generate_anchor(
+            voice_instruct, book.language, device, log_cb, anchor_cb, cancelled,
+            output_path=persist_anchor,
+        )
+        if anchor_path is None:
+            return [], None
+        if session:
+            session.set_anchor(anchor_path)
+            session.save()
 
     # ── Phase 2: Base model + voice clone prompt ──────────────────────
     tts, voice_prompt = _load_base_and_prompt(anchor_path, device, log_cb, anchor_cb)
@@ -76,6 +101,21 @@ def generate_audiobook(
 
         safe_ch      = _safe_filename(chapter.title)
         chapter_path = OUTPUT_DIR / f"{safe_title}_ch{chapter.index:02d}_{safe_ch}.wav"
+
+        # ── Skip already-completed chapters (resume mode) ─────────────
+        if session is not None:
+            ch_state = session.chapter_state(chapter.index)
+            if ch_state and ch_state.done and chapter_path.is_file():
+                if log_cb:
+                    log_cb(
+                        f"TTS: Chapter {chapter.index}/{total_chapters} — "
+                        f"{chapter.title} (skipped, already done)"
+                    )
+                output_paths.append(chapter_path)
+                global_chunk += len(chapter.chunks)
+                if content_cb:
+                    content_cb(ch_idx, global_chunk, total_chapters, total_chunks)
+                continue
 
         if log_cb:
             log_cb(f"TTS: Chapter {chapter.index}/{total_chapters} — {chapter.title}")
@@ -127,6 +167,9 @@ def generate_audiobook(
         if chunk_wavs:
             _merge_and_save(chunk_wavs, chapter_path, log_cb)
             output_paths.append(chapter_path)
+            if session is not None:
+                session.mark_chapter_done(chapter.index, chapter_path)
+                session.save()
 
     # ── Phase 4: Merge chapters ───────────────────────────────────────
     final_path: Path | None = None
@@ -136,7 +179,14 @@ def generate_audiobook(
     elif output_paths:
         final_path = output_paths[0]
 
-    anchor_path.unlink(missing_ok=True)
+    # Only delete the transient anchor; session anchors are kept for future resumes.
+    if session is None:
+        anchor_path.unlink(missing_ok=True)
+    elif session.is_complete:
+        session.delete()
+        if anchor_path and anchor_path.is_file():
+            anchor_path.unlink(missing_ok=True)
+
     return output_paths, final_path
 
 
@@ -149,6 +199,7 @@ def _generate_anchor(
     log_cb: Callable[[str], None] | None,
     anchor_cb: Callable[[float], None] | None,
     cancelled: Callable[[], bool] | None,
+    output_path: Path | None = None,
 ) -> Path | None:
     from qwen_tts import Qwen3TTSModel
 
@@ -179,7 +230,7 @@ def _generate_anchor(
         language="Auto",
     )
 
-    anchor_path = OUTPUT_DIR / ".voice_anchor.wav"
+    anchor_path = output_path or (OUTPUT_DIR / ".voice_anchor.wav")
     sf.write(str(anchor_path), wavs[0], sr)
 
     if log_cb:
