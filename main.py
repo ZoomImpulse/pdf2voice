@@ -163,10 +163,13 @@ def main() -> None:
         bootstrap()
         return
 
+    from PyQt6.QtWidgets import QApplication
     from src.app import Pdf2VoiceApp
     pdf_path = sys.argv[1] if len(sys.argv) > 1 else None
-    app = Pdf2VoiceApp(pdf_path=pdf_path)
-    app.run()
+    qt_app = QApplication(sys.argv)
+    window = Pdf2VoiceApp(pdf_path=pdf_path)
+    window.show()
+    sys.exit(qt_app.exec())
 
 
 if __name__ == "__main__":

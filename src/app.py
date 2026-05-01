@@ -1,178 +1,253 @@
+"""pdf2voice — Main PyQt6 application window."""
 from __future__ import annotations
 
-import asyncio
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal
-from textual.widgets import (
-    Button, Footer, Header, Input, Label,
-    RadioButton, RadioSet, Static,
+from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QFileDialog,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QRadioButton,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
 
 from src.config import LLM_MODEL, OUTPUT_DIR, TTS_BASE_MODEL, TTS_DESIGN_MODEL, TTS_GENDER
+from src.styles import DARK_STYLESHEET
 from src.widgets.chapter_list import ChapterListPanel
 from src.widgets.log_panel import LogPanel
 from src.widgets.pipeline_panel import PipelinePanel
+from src.widgets.preview_panel import PreviewPanel
+from src.workers import PipelineWorker
 
 
-class GenderPanel(Static):
-    DEFAULT_CSS = """
-    GenderPanel {
-        border: solid $primary;
-        padding: 1;
-        width: 18;
-        height: auto;
-    }
-    GenderPanel Label { height: 1; margin-bottom: 1; }
-    GenderPanel RadioSet { height: auto; background: transparent; border: none; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Label("Voice", classes="panel-title")
-        with RadioSet(id="gender-select"):
-            yield RadioButton("♀  Female", id="rb-female", value=TTS_GENDER == "female")
-            yield RadioButton("♂  Male",   id="rb-male",   value=TTS_GENDER == "male")
-
-    def get_gender(self) -> str:
-        rs = self.query_one(RadioSet)
-        return "female" if rs.pressed_button and rs.pressed_button.id == "rb-female" else "male"
-
-
-class SettingsPanel(Static):
-    DEFAULT_CSS = """
-    SettingsPanel {
-        border: solid $primary;
-        padding: 1;
-        width: 32;
-        height: auto;
-    }
-    SettingsPanel Label { height: 1; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Label("Settings", classes="panel-title")
-        yield Label(f"LLM:  [accent]{LLM_MODEL}[/accent]", markup=True)
-        design_short = TTS_DESIGN_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
-        base_short   = TTS_BASE_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
-        yield Label(f"Anchor: [accent]{design_short}[/accent]", markup=True)
-        yield Label(f"Base:   [accent]{base_short}[/accent]", markup=True)
-        yield Label(f"Out:   [accent]{OUTPUT_DIR}[/accent]", markup=True)
-
-
-class InputPanel(Static):
-    DEFAULT_CSS = """
-    InputPanel {
-        border: solid $primary;
-        padding: 1;
-        height: auto;
-        width: 1fr;
-    }
-    InputPanel Horizontal { height: 3; }
-    InputPanel Input { width: 1fr; }
-    InputPanel Button { width: 12; margin-left: 1; }
-    """
-
-    def __init__(self, initial_path: str = "") -> None:
-        super().__init__()
-        self._initial = initial_path
-
-    def compose(self) -> ComposeResult:
-        with Horizontal():
-            yield Input(
-                placeholder="Path to PDF file ...",
-                value=self._initial,
-                id="pdf-input",
-            )
-            yield Button("Browse", id="btn-browse", variant="default")
-
-    def get_path(self) -> str:
-        return self.query_one("#pdf-input", Input).value.strip()
-
-
-class ControlBar(Static):
-    DEFAULT_CSS = """
-    ControlBar {
-        height: 3;
-        layout: horizontal;
-        padding: 0 1;
-        align: left middle;
-    }
-    ControlBar Button { margin-right: 1; }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Button("▶ Start",         id="btn-start",       variant="success")
-        yield Button("⏸ Pause",         id="btn-pause",       variant="warning", disabled=True)
-        yield Button("✕ Cancel",        id="btn-cancel",      variant="error",   disabled=True)
-        yield Button("📂 Open Output",  id="btn-open-output", variant="default")
-
-
-class Pdf2VoiceApp(App):
-    CSS = """
-    Screen { layout: vertical; }
-    #top-row {
-        layout: horizontal;
-        height: auto;
-        margin: 0 0 1 0;
-    }
-    #pipeline-row {
-        height: auto;
-        margin: 0 0 1 0;
-    }
-    #bottom-row {
-        layout: horizontal;
-        height: 1fr;
-        margin: 0 0 1 0;
-    }
-    #chapter-panel { width: 40; margin-right: 1; }
-    #log-panel     { width: 1fr; }
-    .panel-title   { text-style: bold; margin-bottom: 1; }
-    """
-
-    TITLE = "pdf2voice"
-    SUB_TITLE = "PDF → Audiobook (self-hosted)"
-    BINDINGS = [
-        ("ctrl+q", "quit",        "Quit"),
-        ("ctrl+o", "open_output", "Open Output"),
-    ]
-
+class Pdf2VoiceApp(QMainWindow):
     def __init__(self, pdf_path: str | None = None) -> None:
         super().__init__()
-        self._initial_path  = pdf_path or ""
-        self._pipeline_task: asyncio.Task | None = None
-        self._cancelled     = False
-        self._paused        = False
-        self._current_stage = 0
+        self._initial_path = pdf_path or ""
+        self._worker: PipelineWorker | None = None
+        self._book = None
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Container(id="top-row"):
-            yield InputPanel(self._initial_path)
-            yield GenderPanel()
-            yield SettingsPanel()
-        with Container(id="pipeline-row"):
-            yield PipelinePanel()
-        with Container(id="bottom-row"):
-            yield ChapterListPanel(id="chapter-panel")
-            yield LogPanel(id="log-panel")
-        yield ControlBar()
-        yield Footer()
+        self.setWindowTitle("pdf2voice — PDF \u2192 Audiobook")
+        self.resize(1400, 860)
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet(DARK_STYLESHEET)
 
-    # ── Events ────────────────────────────────────────────────────────
+        self._build_ui()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        match event.button.id:
-            case "btn-start":       self._start_pipeline()
-            case "btn-pause":       self._toggle_pause()
-            case "btn-cancel":      self._cancel_pipeline()
-            case "btn-open-output": self.action_open_output()
-            case "btn-browse":      self._browse_pdf()
+    # \u2500\u2500 UI construction \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-    def action_open_output(self) -> None:
+    def _build_ui(self) -> None:
+        root = QWidget()
+        self.setCentralWidget(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        root_layout.addWidget(self._make_header())
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._make_left_panel())
+        splitter.addWidget(self._make_center_panel())
+        splitter.addWidget(self._make_right_panel())
+        splitter.setSizes([280, 720, 320])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
+        root_layout.addWidget(splitter, stretch=1)
+
+        root_layout.addWidget(self._make_footer())
+
+    # \u2500\u2500 Header \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _make_header(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("header-bar")
+        frame.setFixedHeight(52)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(20, 0, 20, 0)
+
+        title = QLabel("\U0001f3b5  pdf2voice")
+        title.setObjectName("app-title")
+        layout.addWidget(title)
+        layout.addStretch()
+
+        self._open_output_btn = QPushButton("\U0001f4c2  Open Output")
+        self._open_output_btn.setObjectName("header-btn")
+        self._open_output_btn.clicked.connect(self._open_output)
+        layout.addWidget(self._open_output_btn)
+
+        return frame
+
+    # \u2500\u2500 Left panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _make_left_panel(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("left-panel")
+        frame.setFixedWidth(280)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        # PDF Input
+        input_box = QGroupBox("PDF File")
+        il = QVBoxLayout(input_box)
+        il.setSpacing(6)
+
+        self._path_edit = QLineEdit(self._initial_path)
+        self._path_edit.setObjectName("path-edit")
+        self._path_edit.setPlaceholderText("Path to PDF file \u2026")
+        il.addWidget(self._path_edit)
+
+        self._browse_btn = QPushButton("Browse \u2026")
+        self._browse_btn.setObjectName("browse-btn")
+        self._browse_btn.clicked.connect(self._browse_pdf)
+        il.addWidget(self._browse_btn)
+
+        layout.addWidget(input_box)
+
+        # Voice selector
+        voice_box = QGroupBox("Voice")
+        vl = QVBoxLayout(voice_box)
+        vl.setSpacing(4)
+
+        self._btn_female = QRadioButton("\u2640  Female")
+        self._btn_male   = QRadioButton("\u2642  Male")
+        self._gender_grp = QButtonGroup(self)
+        self._gender_grp.addButton(self._btn_female)
+        self._gender_grp.addButton(self._btn_male)
+        (self._btn_female if TTS_GENDER == "female" else self._btn_male).setChecked(True)
+        vl.addWidget(self._btn_female)
+        vl.addWidget(self._btn_male)
+
+        layout.addWidget(voice_box)
+
+        # Settings display
+        settings_box = QGroupBox("Settings")
+        sl = QVBoxLayout(settings_box)
+        sl.setSpacing(4)
+
+        design_short = TTS_DESIGN_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
+        base_short   = TTS_BASE_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
+        for key, val in [
+            ("LLM",    LLM_MODEL),
+            ("Anchor", design_short),
+            ("Base",   base_short),
+            ("Output", str(OUTPUT_DIR)),
+        ]:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            k = QLabel(key + ":")
+            k.setObjectName("settings-key")
+            k.setFixedWidth(52)
+            v = QLabel(val)
+            v.setObjectName("settings-val")
+            v.setWordWrap(True)
+            row.addWidget(k)
+            row.addWidget(v, stretch=1)
+            sl.addLayout(row)
+
+        layout.addWidget(settings_box)
+        layout.addStretch()
+
+        return frame
+
+    # \u2500\u2500 Center panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _make_center_panel(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("center-panel")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(8, 12, 8, 12)
+        layout.setSpacing(10)
+
+        self._pipeline_panel = PipelinePanel()
+        layout.addWidget(self._pipeline_panel)
+
+        self._chapter_list = ChapterListPanel()
+        self._chapter_list.chapter_selected.connect(self._on_chapter_selected)
+        layout.addWidget(self._chapter_list, stretch=1)
+
+        return frame
+
+    # \u2500\u2500 Right panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _make_right_panel(self) -> QSplitter:
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
+
+        self._preview_panel = PreviewPanel()
+        splitter.addWidget(self._preview_panel)
+
+        self._log_panel = LogPanel()
+        splitter.addWidget(self._log_panel)
+
+        splitter.setSizes([420, 280])
+        return splitter
+
+    # \u2500\u2500 Footer \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _make_footer(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("footer-bar")
+        frame.setFixedHeight(56)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(8)
+
+        self._start_btn   = QPushButton("\u25b6  Start")
+        self._confirm_btn = QPushButton("\u2713  Confirm && Generate")
+        self._pause_btn   = QPushButton("\u23f8  Pause")
+        self._cancel_btn  = QPushButton("\u2715  Cancel")
+
+        self._start_btn.setObjectName("btn-start")
+        self._confirm_btn.setObjectName("btn-confirm")
+        self._pause_btn.setObjectName("btn-pause")
+        self._cancel_btn.setObjectName("btn-cancel")
+
+        self._confirm_btn.setEnabled(False)
+        self._pause_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(False)
+
+        for btn in (self._start_btn, self._confirm_btn, self._pause_btn, self._cancel_btn):
+            btn.setFixedHeight(36)
+            layout.addWidget(btn)
+
+        layout.addStretch()
+
+        self._status_lbl = QLabel("Ready")
+        self._status_lbl.setObjectName("status-label")
+        layout.addWidget(self._status_lbl)
+
+        self._start_btn.clicked.connect(self._start_pipeline)
+        self._confirm_btn.clicked.connect(self._confirm_tts)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        self._cancel_btn.clicked.connect(self._cancel_pipeline)
+
+        return frame
+
+    # \u2500\u2500 Actions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+    def _browse_pdf(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select PDF", "", "PDF files (*.pdf);;All files (*.*)"
+        )
+        if path:
+            self._path_edit.setText(path)
+
+    def _open_output(self) -> None:
         path = str(OUTPUT_DIR.resolve())
         if sys.platform == "win32":
             os.startfile(path)
@@ -181,255 +256,136 @@ class Pdf2VoiceApp(App):
         else:
             subprocess.Popen(["xdg-open", path])
 
-    def _browse_pdf(self) -> None:
-        import threading
+    @pyqtSlot(int, str)
+    def _on_chapter_selected(self, index: int, title: str) -> None:
+        if self._book is None:
+            return
+        chapter = next(
+            (ch for ch in self._book.chapters if ch.index == index), None
+        )
+        if chapter is None:
+            return
+        from src.pipeline.tts_engine import _chapter_title_text
+        announcement = _chapter_title_text(
+            chapter.index, chapter.title, self._book.subdivision_type
+        )
+        self._preview_panel.show_chapter(
+            index=chapter.index,
+            title=chapter.title,
+            chunks=chapter.chunks,
+            subdivision_type=self._book.subdivision_type,
+            title_announcement=announcement,
+        )
 
-        def _dialog() -> None:
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                root.wm_attributes("-topmost", True)
-                path = filedialog.askopenfilename(
-                    title="Select PDF",
-                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
-                )
-                root.destroy()
-                if path:
-                    self.call_from_thread(self._set_pdf_path, path)
-            except Exception as exc:
-                self.call_from_thread(self._log().error, f"Browse error: {exc}")
+    # \u2500\u2500 Pipeline control \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-        threading.Thread(target=_dialog, daemon=True).start()
-
-    def _set_pdf_path(self, path: str) -> None:
-        self.query_one("#pdf-input", Input).value = path
-
-    # ── Pipeline control ──────────────────────────────────────────────
+    def _get_gender(self) -> str:
+        return "female" if self._btn_female.isChecked() else "male"
 
     def _start_pipeline(self) -> None:
-        pdf_path = self.query_one(InputPanel).get_path()
+        pdf_path = self._path_edit.text().strip()
         if not pdf_path:
-            self._log().error("Please select a PDF file first.")
+            self._log_panel.error("Please select a PDF file first.")
             return
         if not Path(pdf_path).is_file():
-            self._log().error(f"File not found: {pdf_path}")
+            self._log_panel.error(f"File not found: {pdf_path}")
             return
 
-        self._cancelled = False
-        self._paused    = False
-        self._set_controls(running=True)
-        self._pipeline().reset_all()
-        self._chapters().clear()
-        self._log().clear()
+        self._book = None
+        self._pipeline_panel.reset_all()
+        self._chapter_list.clear()
+        self._log_panel.clear()
+        self._preview_panel.show_placeholder()
+        self._set_controls("running")
+        self._status_lbl.setText("Running \u2026")
 
-        gender = self.query_one(GenderPanel).get_gender()
-        self._pipeline_task = asyncio.create_task(
-            self._run_pipeline(pdf_path, gender), name="pipeline"
-        )
+        self._worker = PipelineWorker(pdf_path, self._get_gender())
+        self._wire_worker(self._worker)
+        self._worker.start()
+
+    def _wire_worker(self, w: PipelineWorker) -> None:
+        w.log_info.connect(self._log_panel.info)
+        w.log_success.connect(self._log_panel.success)
+        w.log_warn.connect(self._log_panel.warn)
+        w.log_error.connect(self._log_panel.error)
+
+        w.stage_progress.connect(self._on_stage_progress)
+        w.stage_running.connect(self._pipeline_panel.mark_running)
+        w.stage_done.connect(self._pipeline_panel.mark_done)
+        w.stage_error.connect(self._pipeline_panel.mark_error)
+
+        w.book_ready.connect(self._on_book_ready)
+        w.chapters_ready.connect(self._on_chapters_ready)
+        w.chapter_running.connect(self._chapter_list.set_running)
+        w.chapter_done.connect(self._chapter_list.set_done)
+
+        w.awaiting_confirm.connect(self._on_awaiting_confirm)
+        w.all_done.connect(self._on_all_done)
+        w.failed.connect(self._on_failed)
+        w.finished.connect(self._on_worker_finished)
+
+    @pyqtSlot(int, int, int)
+    def _on_stage_progress(self, stage: int, value: int, maximum: int) -> None:
+        self._pipeline_panel.set_stage_progress(stage, value, maximum)
+
+    @pyqtSlot(object)
+    def _on_book_ready(self, book) -> None:
+        self._book = book
+
+    @pyqtSlot(list)
+    def _on_chapters_ready(self, chapters: list) -> None:
+        self._chapter_list.load_chapters(chapters)
+        self._preview_panel.show_placeholder()
+
+    @pyqtSlot()
+    def _on_awaiting_confirm(self) -> None:
+        self._set_controls("awaiting")
+        self._status_lbl.setText("Awaiting confirmation \u2026")
+
+    @pyqtSlot(list, object)
+    def _on_all_done(self, output_paths: list, final_path) -> None:
+        self._status_lbl.setText(f"Done \u2014 {len(output_paths)} chapter(s)")
+
+    @pyqtSlot(str)
+    def _on_failed(self, error: str) -> None:
+        self._log_panel.error(f"Error: {error}")
+        if self._worker:
+            self._pipeline_panel.mark_error(self._worker._current_stage)
+
+    @pyqtSlot()
+    def _on_worker_finished(self) -> None:
+        self._set_controls("idle")
+
+    def _confirm_tts(self) -> None:
+        if self._worker:
+            self._worker.confirm()
+        self._set_controls("running")
+        self._log_panel.info("Confirmed \u2014 starting TTS generation \u2026")
+        self._status_lbl.setText("Generating \u2026")
 
     def _toggle_pause(self) -> None:
-        self._paused = not self._paused
-        self.query_one("#btn-pause", Button).label = "▶ Resume" if self._paused else "⏸ Pause"
+        if self._worker:
+            paused = self._worker.toggle_pause()
+            self._pause_btn.setText("\u25b6  Resume" if paused else "\u23f8  Pause")
+            self._status_lbl.setText("Paused" if paused else "Running \u2026")
 
     def _cancel_pipeline(self) -> None:
-        self._cancelled = True
-        if self._pipeline_task:
-            self._pipeline_task.cancel()
-        self._set_controls(running=False)
-        self._log().error("Pipeline cancelled.")
+        if self._worker:
+            self._worker.cancel()
+        self._log_panel.error("Pipeline cancelled.")
+        self._set_controls("idle")
+        self._status_lbl.setText("Cancelled")
 
-    # ── Pipeline coroutine ────────────────────────────────────────────
+    # \u2500\u2500 Helper \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-    async def _run_pipeline(self, pdf_path: str, gender: str) -> None:
-        from src.pipeline.extractor import count_pages, extract_pdf
-        from src.pipeline.session import (
-            BookSession, book_from_session, compute_pdf_hash, create_session,
-        )
-        from src.pipeline.structurer import structure_content
-        from src.pipeline.tts_engine import generate_audiobook
-
-        log      = self._log()
-        pipeline = self._pipeline()
-        chapters = self._chapters()
-
-        try:
-            # ── Hash the PDF (fast, enables session lookup) ─────────────
-            pdf_hash_str = await asyncio.get_event_loop().run_in_executor(
-                None, compute_pdf_hash, pdf_path
-            )
-
-            # ── Check for an existing session ──────────────────────────
-            existing = BookSession.load(pdf_hash_str)
-            resuming = (
-                existing is not None
-                and not existing.is_complete
-                and existing.gender == gender
-            )
-            if existing and existing.is_complete:
-                log.info("Session already complete — starting fresh.")
-                existing.delete()
-                existing = None
-            elif existing and existing.gender != gender:
-                log.warn(
-                    f"Existing session used gender '{existing.gender}' — "
-                    "gender changed, starting fresh."
-                )
-                existing.delete()
-                existing = None
-
-            session: BookSession | None = None
-
-            if resuming and existing:
-                # ──────────────────────────────────────────────
-                # RESUME: stages 0+1 are fully skipped
-                # ──────────────────────────────────────────────
-                session = existing
-                book    = book_from_session(session)
-                done    = session.completed_count
-                total   = len(session.chapters)
-                log.info(
-                    f"Resuming \"{session.title}\" — "
-                    f"{done}/{total} chapters already done."
-                )
-                pipeline.mark_done(0)
-                pipeline.mark_done(1)
-                chapters.load_chapters([(ch.index, ch.title) for ch in book.chapters])
-                for ch in session.chapters:
-                    if ch.done:
-                        chapters.set_done(ch.index)
-                await self._check_cancel()
-
-            else:
-                # ──────────────────────────────────────────────
-                # FRESH RUN: stages 0 and 1 run as normal
-                # ──────────────────────────────────────────────
-
-                # ── Stage 0: PDF Extraction ────────────────────────────
-                self._current_stage = 0
-                pipeline.mark_running(0)
-                log.info(f"Extracting PDF: {pdf_path}")
-
-                total_pages = await asyncio.get_event_loop().run_in_executor(
-                    None, count_pages, pdf_path
-                )
-                log.info(f"Found: {total_pages} pages")
-
-                def _extract_cb(cur: int, tot: int) -> None:
-                    self.call_from_thread(
-                        pipeline.set_stage_progress, 0,
-                        (cur / max(tot, 1)) * 100, f"{cur}/{tot}"
-                    )
-
-                markdown = await asyncio.get_event_loop().run_in_executor(
-                    None, extract_pdf, pdf_path, _extract_cb
-                )
-                pipeline.mark_done(0)
-                log.success(f"PDF extracted ({len(markdown):,} characters)")
-                await self._check_cancel()
-
-                # ── Stage 1: LLM Structuring ───────────────────────────
-                self._current_stage = 1
-                pipeline.mark_running(1)
-                log.info(f"AI structuring content via {LLM_MODEL} ...")
-
-                def _llm_log(msg: str) -> None:
-                    self.call_from_thread(log.info, msg)
-
-                book = await asyncio.get_event_loop().run_in_executor(
-                    None, structure_content, markdown, _llm_log
-                )
-                pipeline.mark_done(1)
-                log.success(
-                    f"Structured: \"{book.title}\" — "
-                    f"{len(book.chapters)} chapters, {book.total_chunks} chunks"
-                )
-                if book.genre:
-                    log.info(f"Genre: {book.genre}")
-                log.info(f"Voice: {book.voice_instruct}")
-
-                chapters.load_chapters([(ch.index, ch.title) for ch in book.chapters])
-                await self._check_cancel()
-
-                # Save session right after structuring so TTS can resume later
-                session = create_session(book, pdf_hash_str, pdf_path, gender)
-                session.save()
-                log.info("Session saved — generation can be resumed if interrupted.")
-
-            # ── Stage 2: Voice Anker (VoiceDesign) ───────────────────
-            self._current_stage = 2
-            pipeline.mark_running(2)
-            gender_label = "Female" if gender == "female" else "Male"
-            log.info(f"Voice Anchor: Generating voice reference ({gender_label}) ...")
-
-            def _anchor_cb(pct: float) -> None:
-                self.call_from_thread(pipeline.set_stage_progress, 2, pct)
-
-            def _tts_log(msg: str) -> None:
-                self.call_from_thread(log.info, msg)
-
-            def _content_cb(ch_idx: int, g_chunk: int, tot_ch: int, tot_chunks: int) -> None:
-                pct = (g_chunk / max(tot_chunks, 1)) * 100
-                self.call_from_thread(pipeline.set_stage_progress, 3, pct)
-                self.call_from_thread(chapters.set_running, ch_idx + 1)
-
-            def _is_cancelled() -> bool:
-                return self._cancelled
-
-            _anchor_done = False
-
-            def _anchor_cb_with_switch(pct: float) -> None:
-                nonlocal _anchor_done
-                self.call_from_thread(pipeline.set_stage_progress, 2, pct)
-                if pct >= 100.0 and not _anchor_done:
-                    _anchor_done = True
-                    self.call_from_thread(pipeline.mark_done, 2)
-                    self.call_from_thread(pipeline.mark_running, 3)
-
-            output_paths, final_path = await asyncio.get_event_loop().run_in_executor(
-                None,
-                generate_audiobook,
-                book,
-                gender,
-                _tts_log,
-                _anchor_cb_with_switch,
-                _content_cb,
-                _is_cancelled,
-                session,
-            )
-
-            for ch in book.chapters:
-                chapters.set_done(ch.index)
-
-            pipeline.mark_done(3)
-            log.success(f"Done! {len(output_paths)} chapter file(s) in {OUTPUT_DIR}")
-            for p in output_paths:
-                log.info(f"  Chapter → {p.name}")
-            if final_path and len(output_paths) > 1:
-                log.success(f"  Complete → {final_path.name}")
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            log.error(f"Error: {exc}")
-            pipeline.mark_error(self._current_stage)
-        finally:
-            self._set_controls(running=False)
-
-    async def _check_cancel(self) -> None:
-        if self._cancelled:
-            raise asyncio.CancelledError
-        while self._paused:
-            await asyncio.sleep(0.2)
-
-    # ── Helpers ───────────────────────────────────────────────────────
-
-    def _set_controls(self, running: bool) -> None:
-        self.query_one("#btn-start",  Button).disabled = running
-        self.query_one("#btn-pause",  Button).disabled = not running
-        self.query_one("#btn-cancel", Button).disabled = not running
-
-    def _log(self)      -> LogPanel:       return self.query_one("#log-panel",     LogPanel)
-    def _pipeline(self) -> PipelinePanel:  return self.query_one(PipelinePanel)
-    def _chapters(self) -> ChapterListPanel: return self.query_one("#chapter-panel", ChapterListPanel)
+    def _set_controls(self, state: str) -> None:
+        """state: 'idle' | 'awaiting' | 'running'"""
+        is_idle     = state == "idle"
+        is_awaiting = state == "awaiting"
+        is_running  = state == "running"
+        self._start_btn.setEnabled(is_idle)
+        self._confirm_btn.setEnabled(is_awaiting)
+        self._pause_btn.setEnabled(is_running)
+        self._cancel_btn.setEnabled(not is_idle)
+        if is_idle:
+            self._status_lbl.setText("Ready")

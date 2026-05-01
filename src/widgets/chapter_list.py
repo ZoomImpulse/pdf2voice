@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from textual.app import ComposeResult
-from textual.widgets import Label, ListView, ListItem, Static
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QColor
 
 
 ICON_PENDING = "○"
@@ -9,97 +10,105 @@ ICON_RUNNING = "⟳"
 ICON_DONE    = "✓"
 ICON_ERROR   = "✗"
 
+_COLOR_PENDING = "#64748b"
+_COLOR_RUNNING = "#a78bfa"
+_COLOR_DONE    = "#22c55e"
+_COLOR_ERROR   = "#ef4444"
 
-class ChapterItem(ListItem):
-    DEFAULT_CSS = """
-    ChapterItem {
-        height: 1;
-        padding: 0 1;
-    }
-    ChapterItem Label { width: 1fr; }
-    ChapterItem.done    Label { color: $success; }
-    ChapterItem.running Label { color: $accent; }
-    ChapterItem.error   Label { color: $error; }
-    """
+
+class _ChapterItemData:
+    """Small value object that holds the state for one chapter row."""
+    __slots__ = ("index", "title", "icon", "color")
 
     def __init__(self, index: int, title: str) -> None:
-        super().__init__()
-        self._index = index
-        self._title = title
-        self._icon  = ICON_PENDING
-
-    def compose(self) -> ComposeResult:
-        yield Label(self._render_text())
-
-    def _render_text(self) -> str:
-        short = self._title[:35] + "…" if len(self._title) > 36 else self._title
-        return f"{self._icon} Ch. {self._index}: {short}"
-
-    def _refresh_label(self) -> None:
-        self.query_one(Label).update(self._render_text())
-
-    def set_running(self) -> None:
-        self._icon = ICON_RUNNING
-        self.remove_class("done", "error")
-        self.add_class("running")
-        self._refresh_label()
-
-    def set_done(self) -> None:
-        self._icon = ICON_DONE
-        self.remove_class("running", "error")
-        self.add_class("done")
-        self._refresh_label()
-
-    def set_error(self) -> None:
-        self._icon = ICON_ERROR
-        self.remove_class("running", "done")
-        self.add_class("error")
-        self._refresh_label()
+        self.index = index
+        self.title = title
+        self.icon  = ICON_PENDING
+        self.color = _COLOR_PENDING
 
 
-class ChapterListPanel(Static):
-    DEFAULT_CSS = """
-    ChapterListPanel {
-        border: solid $primary;
-        height: 1fr;
-        padding: 0;
-    }
-    ChapterListPanel ListView {
-        height: 1fr;
-        background: transparent;
-    }
-    """
+class ChapterListPanel(QWidget):
+    chapter_selected = pyqtSignal(int, str)   # chapter_index, title
 
-    def compose(self) -> ComposeResult:
-        yield ListView()
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("chapter-panel")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        self._title_lbl = QLabel("Chapters")
+        self._title_lbl.setObjectName("panel-title")
+        layout.addWidget(self._title_lbl)
+
+        self._list = QListWidget()
+        self._list.setObjectName("chapter-list")
+        self._list.currentRowChanged.connect(self._on_row_changed)
+        layout.addWidget(self._list)
+
+        # index -> _ChapterItemData
+        self._data: dict[int, _ChapterItemData] = {}
+
+    # ── Public API ────────────────────────────────────────────────────
 
     def load_chapters(self, chapters: list[tuple[int, str]]) -> None:
-        lv = self.query_one(ListView)
-        lv.clear()
+        self._list.clear()
+        self._data.clear()
         for idx, title in chapters:
-            lv.append(ChapterItem(idx, title))
-
-    def _item(self, chapter_idx: int) -> ChapterItem | None:
-        for item in self.query(ChapterItem):
-            if item._index == chapter_idx:
-                return item
-        return None
-
-    def set_running(self, chapter_idx: int) -> None:
-        item = self._item(chapter_idx)
-        if item:
-            item.set_running()
-            self.query_one(ListView).scroll_to_widget(item)
-
-    def set_done(self, chapter_idx: int) -> None:
-        item = self._item(chapter_idx)
-        if item:
-            item.set_done()
-
-    def set_error(self, chapter_idx: int) -> None:
-        item = self._item(chapter_idx)
-        if item:
-            item.set_error()
+            d = _ChapterItemData(idx, title)
+            self._data[idx] = d
+            self._list.addItem(self._make_item(d))
+        count = len(chapters)
+        self._title_lbl.setText(f"Chapters ({count})")
 
     def clear(self) -> None:
-        self.query_one(ListView).clear()
+        self._list.clear()
+        self._data.clear()
+        self._title_lbl.setText("Chapters")
+
+    def set_running(self, chapter_idx: int) -> None:
+        self._update(chapter_idx, ICON_RUNNING, _COLOR_RUNNING)
+
+    def set_done(self, chapter_idx: int) -> None:
+        self._update(chapter_idx, ICON_DONE, _COLOR_DONE)
+
+    def set_error(self, chapter_idx: int) -> None:
+        self._update(chapter_idx, ICON_ERROR, _COLOR_ERROR)
+
+    # ── Internals ─────────────────────────────────────────────────────
+
+    def _make_item(self, d: _ChapterItemData) -> QListWidgetItem:
+        item = QListWidgetItem(_fmt(d.index, d.title, d.icon))
+        item.setData(Qt.ItemDataRole.UserRole, d.index)
+        item.setForeground(QColor(d.color))
+        return item
+
+    def _update(self, chapter_idx: int, icon: str, color: str) -> None:
+        d = self._data.get(chapter_idx)
+        if d is None:
+            return
+        d.icon  = icon
+        d.color = color
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if item and item.data(Qt.ItemDataRole.UserRole) == chapter_idx:
+                item.setText(_fmt(d.index, d.title, d.icon))
+                item.setForeground(QColor(color))
+                break
+
+    def _on_row_changed(self, row: int) -> None:
+        if row < 0:
+            return
+        item = self._list.item(row)
+        if item:
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            d   = self._data.get(idx)
+            if d:
+                self.chapter_selected.emit(d.index, d.title)
+
+
+def _fmt(index: int, title: str, icon: str) -> str:
+    short = title[:36] + "…" if len(title) > 37 else title
+    return f"{icon}  Ch. {index}: {short}"
+

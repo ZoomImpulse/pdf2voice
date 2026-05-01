@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from textual.app import ComposeResult
-from textual.widgets import Label, ProgressBar, Static
-from textual.containers import Vertical
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar
+from PyQt6.QtCore import Qt
 
 
 STAGE_LABELS = [
@@ -12,83 +11,92 @@ STAGE_LABELS = [
     "TTS Content",
 ]
 
-STATUS_IDLE    = "idle"
-STATUS_RUNNING = "..."
-STATUS_DONE    = "✓"
-STATUS_ERROR   = "✗"
 
+class _StageRow(QWidget):
+    def __init__(self, index: int, label: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(8)
 
-class StageRow(Static):
-    DEFAULT_CSS = """
-    StageRow {
-        height: 2;
-        layout: horizontal;
-        padding: 0 1;
-    }
-    StageRow Label.stage-name {
-        width: 22;
-        content-align: left middle;
-    }
-    StageRow ProgressBar {
-        width: 1fr;
-    }
-    StageRow Label.stage-status {
-        width: 10;
-        content-align: right middle;
-    }
-    """
+        num = QLabel(str(index + 1))
+        num.setObjectName("stage-num")
+        num.setFixedWidth(18)
+        layout.addWidget(num)
 
-    def __init__(self, index: int, label: str) -> None:
-        super().__init__()
-        self._index = index
-        self._label = label
+        name = QLabel(label)
+        name.setObjectName("stage-name")
+        name.setFixedWidth(130)
+        layout.addWidget(name)
 
-    def compose(self) -> ComposeResult:
-        yield Label(f"[{self._index + 1}] {self._label}", classes="stage-name")
-        yield ProgressBar(total=100, show_eta=False, show_percentage=False)
-        yield Label(STATUS_IDLE, classes="stage-status")
+        self._bar = QProgressBar()
+        self._bar.setObjectName("stage-bar")
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(6)
+        layout.addWidget(self._bar)
 
-    def set_progress(self, value: float, status: str | None = None) -> None:
-        self.query_one(ProgressBar).progress = value
-        if status is not None:
-            self.query_one(".stage-status", Label).update(status)
+        self._status = QLabel("—")
+        self._status.setObjectName("stage-status")
+        self._status.setFixedWidth(52)
+        self._status.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        layout.addWidget(self._status)
+
+    def set_progress(self, value: int, maximum: int) -> None:
+        self._bar.setRange(0, max(maximum, 1))
+        self._bar.setValue(value)
+
+    def set_status(self, text: str, variant: str = "") -> None:
+        self._status.setText(text)
+        name = f"stage-status-{variant}" if variant else "stage-status"
+        self._status.setObjectName(name)
+        # Force QSS re-evaluation
+        self._status.style().unpolish(self._status)
+        self._status.style().polish(self._status)
 
     def reset(self) -> None:
-        self.set_progress(0, STATUS_IDLE)
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self.set_status("—")
 
 
-class PipelinePanel(Static):
-    DEFAULT_CSS = """
-    PipelinePanel {
-        border: solid $primary;
-        padding: 1;
-        height: auto;
-    }
-    PipelinePanel > Vertical {
-        height: auto;
-    }
-    """
+class PipelinePanel(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("pipeline-panel")
 
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            for i, label in enumerate(STAGE_LABELS):
-                yield StageRow(i, label)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(2)
 
-    def _row(self, stage: int) -> StageRow:
-        return self.query(StageRow)[stage]
+        title = QLabel("Pipeline")
+        title.setObjectName("panel-title")
+        layout.addWidget(title)
 
-    def set_stage_progress(self, stage: int, percent: float, status: str | None = None) -> None:
-        self._row(stage).set_progress(percent, status)
+        self._rows: list[_StageRow] = []
+        for i, label in enumerate(STAGE_LABELS):
+            row = _StageRow(i, label)
+            self._rows.append(row)
+            layout.addWidget(row)
+
+    def set_stage_progress(self, stage: int, value: int, maximum: int = 100) -> None:
+        self._rows[stage].set_progress(value, maximum)
 
     def mark_running(self, stage: int) -> None:
-        self.set_stage_progress(stage, 0, STATUS_RUNNING)
+        self._rows[stage].set_progress(0, 100)
+        self._rows[stage].set_status("…", "running")
 
     def mark_done(self, stage: int) -> None:
-        self.set_stage_progress(stage, 100, STATUS_DONE)
+        self._rows[stage].set_progress(100, 100)
+        self._rows[stage].set_status("✓", "done")
 
     def mark_error(self, stage: int) -> None:
-        self.set_stage_progress(stage, 0, STATUS_ERROR)
+        self._rows[stage].set_progress(0, 100)
+        self._rows[stage].set_status("✗", "error")
 
     def reset_all(self) -> None:
-        for row in self.query(StageRow):
+        for row in self._rows:
             row.reset()
