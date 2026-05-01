@@ -163,6 +163,10 @@ def main() -> None:
         bootstrap()
         return
 
+    import warnings
+    warnings.filterwarnings("ignore", message=".*flash.attn.*", category=UserWarning)
+    warnings.filterwarnings("ignore", message=".*flash_attn.*", category=UserWarning)
+
     from PyQt6.QtWidgets import QApplication
     from src.app import Pdf2VoiceApp
     pdf_path = sys.argv[1] if len(sys.argv) > 1 else None

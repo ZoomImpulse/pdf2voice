@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSplitter,
@@ -176,11 +177,42 @@ class Pdf2VoiceApp(QMainWindow):
         self._pipeline_panel = PipelinePanel()
         layout.addWidget(self._pipeline_panel)
 
+        # Inline confirmation banner — hidden until AI structuring finishes
+        self._confirm_bar = self._make_confirm_bar()
+        self._confirm_bar.setVisible(False)
+        layout.addWidget(self._confirm_bar)
+
         self._chapter_list = ChapterListPanel()
         self._chapter_list.chapter_selected.connect(self._on_chapter_selected)
         layout.addWidget(self._chapter_list, stretch=1)
 
         return frame
+
+    def _make_confirm_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("confirm-bar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(14)
+
+        icon = QLabel("ℹ️")
+        icon.setObjectName("confirm-bar-icon")
+        layout.addWidget(icon)
+
+        self._confirm_msg = QLabel(
+            "AI structuring complete — review the chapters, then generate audio."
+        )
+        self._confirm_msg.setObjectName("confirm-bar-msg")
+        self._confirm_msg.setWordWrap(True)
+        layout.addWidget(self._confirm_msg, stretch=1)
+
+        btn = QPushButton("▶▶  Generate Audio")
+        btn.setObjectName("btn-generate")
+        btn.setFixedHeight(34)
+        btn.clicked.connect(self._confirm_tts)
+        layout.addWidget(btn)
+
+        return bar
 
     # \u2500\u2500 Right panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -207,21 +239,18 @@ class Pdf2VoiceApp(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(8)
 
-        self._start_btn   = QPushButton("\u25b6  Start")
-        self._confirm_btn = QPushButton("\u2713  Confirm && Generate")
-        self._pause_btn   = QPushButton("\u23f8  Pause")
-        self._cancel_btn  = QPushButton("\u2715  Cancel")
+        self._start_btn  = QPushButton("\u25b6  Start")
+        self._pause_btn  = QPushButton("\u23f8  Pause")
+        self._cancel_btn = QPushButton("\u2715  Cancel")
 
         self._start_btn.setObjectName("btn-start")
-        self._confirm_btn.setObjectName("btn-confirm")
         self._pause_btn.setObjectName("btn-pause")
         self._cancel_btn.setObjectName("btn-cancel")
 
-        self._confirm_btn.setEnabled(False)
         self._pause_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
 
-        for btn in (self._start_btn, self._confirm_btn, self._pause_btn, self._cancel_btn):
+        for btn in (self._start_btn, self._pause_btn, self._cancel_btn):
             btn.setFixedHeight(36)
             layout.addWidget(btn)
 
@@ -232,7 +261,6 @@ class Pdf2VoiceApp(QMainWindow):
         layout.addWidget(self._status_lbl)
 
         self._start_btn.clicked.connect(self._start_pipeline)
-        self._confirm_btn.clicked.connect(self._confirm_tts)
         self._pause_btn.clicked.connect(self._toggle_pause)
         self._cancel_btn.clicked.connect(self._cancel_pipeline)
 
@@ -291,6 +319,44 @@ class Pdf2VoiceApp(QMainWindow):
             self._log_panel.error(f"File not found: {pdf_path}")
             return
 
+        force_fresh  = False
+        force_resume = False
+
+        # Check for an existing incomplete session before spawning the worker
+        try:
+            from src.pipeline.session import BookSession, compute_pdf_hash
+            pdf_hash = compute_pdf_hash(pdf_path)
+            existing = BookSession.load(pdf_hash)
+            if existing is not None and not existing.is_complete:
+                done  = existing.completed_count
+                total = len(existing.chapters)
+                gender_note = (
+                    f"  (recorded as {existing.gender}, currently set to {self._get_gender()})"
+                    if existing.gender != self._get_gender() else ""
+                )
+                dlg = QMessageBox(self)
+                dlg.setWindowTitle("Existing Session")
+                dlg.setText(
+                    f'<b>{existing.title or "Untitled book"}</b>'
+                    f"<br><br>A previous session was found for this PDF."
+                    f"<br>{done} of {total} chapters already completed{gender_note}."
+                    f"<br><br>Would you like to <b>resume</b> or <b>start fresh</b>?"
+                )
+                dlg.setIcon(QMessageBox.Icon.Question)
+                btn_resume = dlg.addButton("Resume", QMessageBox.ButtonRole.AcceptRole)
+                btn_fresh  = dlg.addButton("Start Fresh", QMessageBox.ButtonRole.DestructiveRole)
+                dlg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+                dlg.exec()
+                clicked = dlg.clickedButton()
+                if clicked is btn_resume:
+                    force_resume = True
+                elif clicked is btn_fresh:
+                    force_fresh = True
+                else:
+                    return   # user cancelled
+        except Exception:
+            pass  # session check is best-effort; proceed normally if it fails
+
         self._book = None
         self._pipeline_panel.reset_all()
         self._chapter_list.clear()
@@ -299,7 +365,10 @@ class Pdf2VoiceApp(QMainWindow):
         self._set_controls("running")
         self._status_lbl.setText("Running \u2026")
 
-        self._worker = PipelineWorker(pdf_path, self._get_gender())
+        self._worker = PipelineWorker(
+            pdf_path, self._get_gender(),
+            force_fresh=force_fresh, force_resume=force_resume,
+        )
         self._wire_worker(self._worker)
         self._worker.start()
 
@@ -339,8 +408,9 @@ class Pdf2VoiceApp(QMainWindow):
 
     @pyqtSlot()
     def _on_awaiting_confirm(self) -> None:
+        self._confirm_bar.setVisible(True)
         self._set_controls("awaiting")
-        self._status_lbl.setText("Awaiting confirmation \u2026")
+        self._status_lbl.setText("Review chapters \u2026")
 
     @pyqtSlot(list, object)
     def _on_all_done(self, output_paths: list, final_path) -> None:
@@ -357,6 +427,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._set_controls("idle")
 
     def _confirm_tts(self) -> None:
+        self._confirm_bar.setVisible(False)
         if self._worker:
             self._worker.confirm()
         self._set_controls("running")
@@ -370,6 +441,7 @@ class Pdf2VoiceApp(QMainWindow):
             self._status_lbl.setText("Paused" if paused else "Running \u2026")
 
     def _cancel_pipeline(self) -> None:
+        self._confirm_bar.setVisible(False)
         if self._worker:
             self._worker.cancel()
         self._log_panel.error("Pipeline cancelled.")
@@ -380,11 +452,9 @@ class Pdf2VoiceApp(QMainWindow):
 
     def _set_controls(self, state: str) -> None:
         """state: 'idle' | 'awaiting' | 'running'"""
-        is_idle     = state == "idle"
-        is_awaiting = state == "awaiting"
-        is_running  = state == "running"
+        is_idle    = state == "idle"
+        is_running = state == "running"
         self._start_btn.setEnabled(is_idle)
-        self._confirm_btn.setEnabled(is_awaiting)
         self._pause_btn.setEnabled(is_running)
         self._cancel_btn.setEnabled(not is_idle)
         if is_idle:

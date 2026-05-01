@@ -30,10 +30,18 @@ class PipelineWorker(QThread):
     all_done         = pyqtSignal(list, object)   # output_paths, final_path | None
     failed           = pyqtSignal(str)
 
-    def __init__(self, pdf_path: str, gender: str) -> None:
+    def __init__(
+        self,
+        pdf_path: str,
+        gender: str,
+        force_fresh: bool = False,
+        force_resume: bool = False,
+    ) -> None:
         super().__init__()
-        self.pdf_path = pdf_path
-        self.gender   = gender
+        self.pdf_path     = pdf_path
+        self.gender       = gender
+        self._force_fresh  = force_fresh
+        self._force_resume = force_resume
 
         self._confirm_event = threading.Event()
         self._cancelled     = False
@@ -93,20 +101,26 @@ class PipelineWorker(QThread):
 
         # ── Check for an existing session ──────────────────────────────
         existing = BookSession.load(pdf_hash)
-        resuming = (
-            existing is not None
-            and not existing.is_complete
-            and existing.gender == gender
-        )
-        if existing and existing.is_complete:
-            self.log_info.emit("Session already complete — starting fresh.")
+
+        if self._force_fresh and existing:
+            self.log_info.emit("Starting fresh — previous session discarded.")
             existing.delete()
             existing = None
-        elif existing and existing.gender != gender:
-            self.log_warn.emit(
-                f"Existing session used gender '{existing.gender}' — "
-                "gender changed, starting fresh."
-            )
+
+        resuming = False
+        if existing is not None and not existing.is_complete:
+            if self._force_resume:
+                resuming = True
+                if existing.gender != gender:
+                    self.log_warn.emit(
+                        f"Resuming with gender '{gender}' "
+                        f"(session was recorded as '{existing.gender}')."
+                    )
+            elif existing.gender == gender:
+                resuming = True
+            # else: gender mismatch without force flags — handled by dialog in app.py
+        elif existing and existing.is_complete:
+            self.log_info.emit("Session already complete — starting fresh.")
             existing.delete()
             existing = None
 

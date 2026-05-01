@@ -213,7 +213,7 @@ def _generate_anchor(
     tts = Qwen3TTSModel.from_pretrained(
         TTS_DESIGN_MODEL,
         device_map=device,
-        torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
+        dtype=torch.bfloat16 if device != "cpu" else torch.float32,
     )
 
     if cancelled and cancelled():
@@ -260,7 +260,7 @@ def _load_base_and_prompt(
     tts = Qwen3TTSModel.from_pretrained(
         TTS_BASE_MODEL,
         device_map=device,
-        torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
+        dtype=torch.bfloat16 if device != "cpu" else torch.float32,
     )
 
     voice_prompt = tts.create_voice_clone_prompt(

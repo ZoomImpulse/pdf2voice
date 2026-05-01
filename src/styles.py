@@ -145,33 +145,67 @@ QWidget#pipeline-panel {
     border-radius: 10px;
 }
 
-QLabel#stage-num {
+/* Step dots */
+QLabel#step-dot-pending {
+    background: #2a2a3e;
+    border: 2px solid #3a3a5e;
+    border-radius: 14px;
     color: #475569;
     font-size: 11px;
     font-weight: 700;
 }
-QLabel#stage-name {
-    color: #94a3b8;
-    font-size: 12px;
+QLabel#step-dot-running {
+    background: #2e1f5e;
+    border: 2px solid #7c3aed;
+    border-radius: 14px;
+    color: #a78bfa;
+    font-size: 11px;
+    font-weight: 700;
 }
-QLabel#stage-status {
-    color: #475569;
-    font-size: 13px;
+QLabel#step-dot-done {
+    background: #14532d;
+    border: 2px solid #22c55e;
+    border-radius: 14px;
+    color: #22c55e;
+    font-size: 11px;
+    font-weight: 700;
 }
-QLabel#stage-status-running { color: #a78bfa; }
-QLabel#stage-status-done    { color: #22c55e; }
-QLabel#stage-status-error   { color: #ef4444; }
+QLabel#step-dot-error {
+    background: #450a0a;
+    border: 2px solid #ef4444;
+    border-radius: 14px;
+    color: #ef4444;
+    font-size: 11px;
+    font-weight: 700;
+}
 
-QProgressBar#stage-bar {
+/* Connector lines between dots */
+QLabel#step-sep {
+    background: #2a2a3e;
+    margin-top: 12px;
+}
+
+QLabel#step-label {
+    color: #475569;
+    font-size: 10px;
+    max-width: 80px;
+}
+
+/* Single animated progress bar */
+QProgressBar#pipeline-bar {
     background: #2a2a3e;
     border: none;
-    border-radius: 3px;
-    max-height: 6px;
+    border-radius: 4px;
 }
-QProgressBar#stage-bar::chunk {
+QProgressBar#pipeline-bar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #7c3aed, stop:1 #a78bfa);
-    border-radius: 3px;
+    border-radius: 4px;
+}
+
+QLabel#pipeline-stage-lbl {
+    color: #64748b;
+    font-size: 11px;
 }
 
 /* ── Chapter list ────────────────────────────────────────────────── */
@@ -181,42 +215,141 @@ QWidget#chapter-panel {
     border-radius: 10px;
 }
 
-QListWidget#chapter-list {
+QFrame#side-panel-header {
     background: transparent;
-    border: none;
-    outline: none;
-    padding: 2px;
 }
-QListWidget#chapter-list::item {
-    padding: 5px 8px;
-    border-radius: 4px;
+
+QLabel#side-panel-title {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
 }
-QListWidget#chapter-list::item:selected {
-    background: #2e1f5e;
-    color: #a78bfa;
-}
-QListWidget#chapter-list::item:hover:!selected {
+
+QFrame#panel-sep {
     background: #1e1e2e;
 }
 
-/* ── Preview & Log cards ─────────────────────────────────────────── */
+QWidget#panel-scroll-content {
+    background: #1a1a24;
+}
+
+QFrame#chapter-card {
+    background: #111118;
+    border-radius: 0px;
+    border-left: none;
+}
+
+QLabel#card-dot-pending { color: #2d3748; font-size: 13px; }
+QLabel#card-dot-running { color: #a78bfa; font-size: 13px; }
+QLabel#card-dot-done    { color: #22c55e; font-size: 13px; }
+QLabel#card-dot-error   { color: #ef4444; font-size: 13px; }
+
+QLabel#card-num {
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: monospace;
+}
+
+QLabel#card-title {
+    color: #64748b;
+    font-size: 12px;
+}
+
+/* ── Preview panel ───────────────────────────────────────────────── */
 QWidget#preview-panel {
     background: #1a1a24;
     border: 1px solid #1e1e2e;
     border-radius: 10px;
 }
+
+QWidget#preview-content {
+    background: #1a1a24;
+}
+
+QLabel#preview-placeholder {
+    color: #2d3748;
+    font-size: 13px;
+    padding: 20px;
+}
+
+QLabel#preview-chapter-title {
+    color: #a78bfa;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#preview-meta {
+    color: #334155;
+    font-size: 11px;
+}
+
+QFrame#preview-announcement {
+    background: #1a1208;
+    border: 1px solid #2d1f08;
+    border-left: 3px solid #f59e0b;
+    border-radius: 0 6px 6px 0;
+}
+
+QLabel#preview-ann-header {
+    color: #d97706;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}
+
+QLabel#preview-ann-text {
+    color: #fcd34d;
+    font-style: italic;
+    font-size: 12px;
+}
+
+QLabel#preview-section-header {
+    color: #1e2a3a;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QFrame#preview-chunk-card {
+    background: #111118;
+    border: 1px solid #1a1a2a;
+    border-radius: 8px;
+}
+
+QLabel#chunk-badge {
+    background: #2e1f5e;
+    color: #a78bfa;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 11px;
+}
+
+QLabel#chunk-chars {
+    color: #2d3748;
+    font-size: 10px;
+    font-family: monospace;
+}
+
+QLabel#chunk-body {
+    color: #64748b;
+    font-size: 12px;
+}
+
+/* ── Log card ────────────────────────────────────────────────────── */
 QWidget#log-panel {
     background: #1a1a24;
     border: 1px solid #1e1e2e;
     border-radius: 10px;
 }
 
-QTextEdit#preview-text, QTextEdit#log-text {
+QTextEdit#log-text {
     background: transparent;
     border: none;
     color: #e2e8f0;
     font-size: 12px;
-    line-height: 1.6;
     selection-background-color: #7c3aed;
 }
 
@@ -273,6 +406,42 @@ QPushButton#btn-cancel:disabled { background: #1a1010; border-color: #1a1010; co
 QLabel#status-label {
     color: #475569;
     font-size: 12px;
+}
+
+/* ── Inline confirmation banner ──────────────────────────────────── */
+QFrame#confirm-bar {
+    background: #1a1f2e;
+    border: 1px solid #2e3a5a;
+    border-left: 3px solid #7c3aed;
+    border-radius: 8px;
+}
+
+QLabel#confirm-bar-icon {
+    font-size: 16px;
+}
+
+QLabel#confirm-bar-msg {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+QPushButton#btn-generate {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #7c3aed, stop:1 #9333ea);
+    border: none;
+    border-radius: 6px;
+    padding: 0 20px;
+    color: #f5f3ff;
+    font-weight: 700;
+    font-size: 13px;
+    min-width: 150px;
+}
+QPushButton#btn-generate:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #6d28d9, stop:1 #7c3aed);
+}
+QPushButton#btn-generate:pressed {
+    background: #5b21b6;
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────── */
