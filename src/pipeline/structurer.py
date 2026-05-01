@@ -7,7 +7,10 @@ from typing import Callable
 
 import ollama
 
-from src.config import LLM_MODEL, TTS_CHUNK_SIZE, TTS_VOICE_INSTRUCT
+from src.config import GENRE_PROMPTS, LLM_MODEL, TTS_CHUNK_SIZE, TTS_VOICE_INSTRUCT
+
+# Genre keys exposed to the LLM — must stay in sync with GENRE_PROMPTS in config.py.
+_GENRE_KEYS = list(GENRE_PROMPTS.keys())  # e.g. ["novel", "thriller", ...]
 
 SYSTEM_PROMPT = """\
 You are an assistant that prepares PDF content for text-to-speech (TTS) synthesis.
@@ -16,39 +19,23 @@ Your tasks:
 1. Detect the chapter structure from Markdown (# H1, ## H2 as chapter boundaries).
 2. Clean the text: remove page numbers, headers/footers, footnotes, URLs, and image captions.
 3. Expand abbreviations to their full form (e.g. → for example, etc. → et cetera, vs. → versus).
-4. Split each chapter into chunks of at most {chunk_size} characters (break only at sentence boundaries).
+4. Split each chapter into chunks of at most {{chunk_size}} characters (break only at sentence boundaries).
 5. Detect the primary language (de/en).
 6. Detect the subdivision label the book uses for its top-level divisions (e.g. "Kapitel", "Teil",
    "Abschnitt", "Part", "Chapter", "Section", "Book", "Act", "Canto"). Use exactly the word the book
    itself uses. If the divisions have no label (just numbers or no heading at all), use the most natural
    word for the detected language ("Kapitel" for German, "Chapter" for English).
    A division may also have no title — only a number or nothing. In that case set "title" to "".
-7. Analyse the style and genre of the text and formulate a "voice_instruct" in English (2-3 sentences)
-   for a VoiceDesign TTS system. Describe pace, tone, expression and voice character so the TTS model
-   chooses the best reading style for this text.
-
-   Examples by genre:
-   - Novel/Fiction → "Speak as a warm, immersive storyteller. Vary your pace to build tension or
-     tenderness as the narrative demands. Use gentle expressiveness — subtle emotion rather than
-     theatrical drama."
-   - Non-fiction/Science → "Speak as a calm, authoritative expert. Maintain a clear, measured pace
-     that aids comprehension of complex ideas. Emphasise key terms with natural precision."
-   - Biography/Memoir → "Speak in a personal, intimate tone, as if recounting lived experience.
-     Allow reflective pauses. The voice should feel honest and human, not performed."
-   - Self-help/Guide → "Speak with warmth and clarity, like a trusted mentor. Keep an encouraging,
-     steady pace. Emphasise actionable insights with calm confidence."
-   - Philosophy/Essay → "Speak thoughtfully and deliberately, as if working through ideas aloud.
-     Allow pauses for reflection. Tone is contemplative, never rushed."
-   - Technical manual → "Speak clearly and neutrally, with a precise, even pace. Stress technical
-     terms without inflection. Prioritise intelligibility over expressiveness."
+7. Classify the text into exactly one of the following genre keys:
+   {genre_keys}
+   Choose the single best-matching key. Return it as-is — do not invent new keys.
 
 Respond ONLY with valid JSON — no Markdown code fences, no explanations:
 {{
   "title": "Document title",
   "language": "de",
-  "genre": "Short genre label in English",
+  "genre": "one of the genre keys listed above",
   "subdivision_type": "Kapitel",
-  "voice_instruct": "2-3 sentences in English describing the ideal reading style",
   "chapters": [
     {{
       "index": 1,
@@ -86,7 +73,10 @@ def structure_content(
     log_cb: Callable[[str], None] | None = None,
     model: str = LLM_MODEL,
 ) -> StructuredBook:
-    system = SYSTEM_PROMPT.format(chunk_size=TTS_CHUNK_SIZE)
+    system = SYSTEM_PROMPT.format(
+        chunk_size=TTS_CHUNK_SIZE,
+        genre_keys=", ".join(f'"{k}"' for k in _GENRE_KEYS),
+    )
 
     if log_cb:
         log_cb(f"LLM: Sending {len(markdown):,} characters to {model} ...")
@@ -113,6 +103,8 @@ def structure_content(
         if log_cb:
             log_cb("LLM: JSON parsing failed — using fallback structure")
 
+    raw_subdivision = data.get("subdivision_type", "").strip()
+
     seen_indices: set[int] = set()
     chapters: list[Chapter] = []
     for i, ch in enumerate(data.get("chapters", [])):
@@ -124,9 +116,10 @@ def structure_content(
                 log_cb(f"LLM: Duplicate chapter index {idx} skipped")
             continue
         seen_indices.add(idx)
+        raw_title = ch.get("title", f"Chapter {i + 1}")
         chapters.append(Chapter(
             index=idx,
-            title=ch.get("title", f"Chapter {i + 1}"),
+            title=_strip_label_prefix(raw_title, idx, raw_subdivision),
             chunks=ch.get("chunks", [ch.get("text", "")]),
         ))
 
@@ -135,8 +128,8 @@ def structure_content(
         if log_cb:
             log_cb("LLM: No chapters detected — treating document as one chapter")
 
-    voice_instruct   = data.get("voice_instruct", "").strip() or TTS_VOICE_INSTRUCT
-    genre            = data.get("genre", "").strip()
+    genre            = data.get("genre", "").strip().lower()
+    voice_instruct   = GENRE_PROMPTS.get(genre, TTS_VOICE_INSTRUCT)
     language         = data.get("language", "en")
     subdivision_type = data.get("subdivision_type", "").strip()
     if not subdivision_type:
@@ -157,6 +150,21 @@ def structure_content(
         voice_instruct=voice_instruct,
         chapters=chapters,
     )
+
+
+def _strip_label_prefix(title: str, index: int, subdivision_type: str) -> str:
+    """Remove leading '{subdivision_type} {index}' from a title if the LLM included it.
+
+    E.g. "Kapitel 2 Die Suche" → "Die Suche" when subdivision_type="Kapitel", index=2.
+    """
+    if not title or not subdivision_type:
+        return title
+    pattern = re.compile(
+        r"^" + re.escape(subdivision_type) + r"\s+" + re.escape(str(index)) + r"[\s:.\-–—]*",
+        re.IGNORECASE,
+    )
+    stripped = pattern.sub("", title).strip()
+    return stripped
 
 
 def _strip_code_fences(text: str) -> str:

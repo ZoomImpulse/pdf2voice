@@ -32,6 +32,61 @@ TTS_VOICE_INSTRUCT: str = os.getenv(
     ),
 )
 
+# Predefined TTS voice instructions per genre.
+# The LLM picks one of these keys; the corresponding prompt is used for VoiceDesign.
+GENRE_PROMPTS: dict[str, str] = {
+    "novel": (
+        "Speak as a warm, immersive storyteller. "
+        "Vary your pace to build tension or tenderness as the narrative demands. "
+        "Use gentle expressiveness — subtle emotion rather than theatrical drama."
+    ),
+    "thriller": (
+        "Speak with understated urgency, keeping the listener on edge. "
+        "Quicken your pace during tense passages and slow down for ominous moments. "
+        "Maintain a cool, controlled tone — menace through restraint, not volume."
+    ),
+    "nonfiction": (
+        "Speak as a calm, authoritative expert. "
+        "Maintain a clear, measured pace that aids comprehension of complex ideas. "
+        "Emphasise key terms with natural precision."
+    ),
+    "biography": (
+        "Speak in a personal, intimate tone, as if recounting lived experience. "
+        "Allow reflective pauses. "
+        "The voice should feel honest and human, not performed."
+    ),
+    "selfhelp": (
+        "Speak with warmth and clarity, like a trusted mentor. "
+        "Keep an encouraging, steady pace. "
+        "Emphasise actionable insights with calm confidence."
+    ),
+    "philosophy": (
+        "Speak thoughtfully and deliberately, as if working through ideas aloud. "
+        "Allow pauses for reflection. "
+        "Tone is contemplative, never rushed."
+    ),
+    "technical": (
+        "Speak clearly and neutrally, with a precise, even pace. "
+        "Stress technical terms without inflection. "
+        "Prioritise intelligibility over expressiveness."
+    ),
+    "history": (
+        "Speak with measured gravitas, as if narrating a documentary. "
+        "Keep a steady, authoritative pace with subtle weight on significant events. "
+        "Tone is respectful and engaged, never dry."
+    ),
+    "children": (
+        "Speak with a bright, playful energy and a gentle, welcoming tone. "
+        "Use clear articulation and a lively pace that holds a child's attention. "
+        "Bring characters to life with light, distinct expressiveness."
+    ),
+    "poetry": (
+        "Speak with careful attention to rhythm, breath, and line breaks. "
+        "Allow silence to carry meaning. "
+        "The voice should be expressive but restrained — the words do the work."
+    ),
+}
+
 # Gerät für TTS-Inferenz
 TTS_DEVICE: str = os.getenv("TTS_DEVICE", "cuda")
 
