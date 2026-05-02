@@ -203,6 +203,11 @@ QProgressBar#pipeline-bar::chunk {
     border-radius: 4px;
 }
 
+QLabel#pipeline-spinner {
+    color: #a78bfa;
+    font-size: 15px;
+}
+
 QLabel#pipeline-stage-lbl {
     color: #64748b;
     font-size: 11px;

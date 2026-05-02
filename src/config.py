@@ -6,6 +6,16 @@ load_dotenv()
 
 OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen3:8b")
+# Maximum context window (tokens) passed to Ollama.
+# Keep this well below your GPU VRAM headroom: the KV cache for 48k tokens on a
+# 8B model can exceed 6 GB, causing silent CPU offload and very slow generation.
+# 16 384 is a safe default for 8-12 GB GPUs.  Increase if you have more VRAM.
+LLM_CTX: int = int(os.getenv("LLM_CTX", "16384"))
+
+# PDF Extraction: Uses Docling with OCR disabled for layout-aware, memory-efficient extraction.
+# No system dependencies required — uses Docling's native layout models.
+# Install: pip install docling
+PDF_EXTRACTOR: str = "docling"  # Layout-aware PDF parsing, OCR disabled
 
 # Phase 1: VoiceDesign — generiert den Stimm-Anker (kurze Referenz-Audio)
 TTS_DESIGN_MODEL: str = os.getenv(

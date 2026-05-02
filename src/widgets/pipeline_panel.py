@@ -1,102 +1,125 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 
-STAGE_LABELS = [
-    "PDF Extraction",
-    "AI Structuring",
-    "Voice Anchor",
-    "TTS Content",
-]
-
-
-class _StageRow(QWidget):
-    def __init__(self, index: int, label: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(8)
-
-        num = QLabel(str(index + 1))
-        num.setObjectName("stage-num")
-        num.setFixedWidth(18)
-        layout.addWidget(num)
-
-        name = QLabel(label)
-        name.setObjectName("stage-name")
-        name.setFixedWidth(130)
-        layout.addWidget(name)
-
-        self._bar = QProgressBar()
-        self._bar.setObjectName("stage-bar")
-        self._bar.setRange(0, 100)
-        self._bar.setValue(0)
-        self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(6)
-        layout.addWidget(self._bar)
-
-        self._status = QLabel("—")
-        self._status.setObjectName("stage-status")
-        self._status.setFixedWidth(52)
-        self._status.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        layout.addWidget(self._status)
-
-    def set_progress(self, value: int, maximum: int) -> None:
-        self._bar.setRange(0, max(maximum, 1))
-        self._bar.setValue(value)
-
-    def set_status(self, text: str, variant: str = "") -> None:
-        self._status.setText(text)
-        name = f"stage-status-{variant}" if variant else "stage-status"
-        self._status.setObjectName(name)
-        # Force QSS re-evaluation
-        self._status.style().unpolish(self._status)
-        self._status.style().polish(self._status)
-
-    def reset(self) -> None:
-        self._bar.setRange(0, 100)
-        self._bar.setValue(0)
-        self.set_status("—")
+# Human-readable descriptions shown while each stage is active.
+_STAGE_RUNNING: dict[int, str] = {
+    0: "Extracting PDF …",
+    1: "Structuring with AI …",
+    2: "Preparing voice …",
+    3: "Generating speech …",
+}
+_STAGE_DONE: dict[int, str] = {
+    0: "PDF extracted",
+    1: "Structuring done",
+    2: "Voice ready",
+    3: "All done",
+}
+_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
 class PipelinePanel(QWidget):
+    """Compact loading indicator: animated spinner + current-state label."""
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("pipeline-panel")
 
+        self._frame_idx = 0
+        self._spinning = False
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(2)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
 
-        title = QLabel("Pipeline")
-        title.setObjectName("panel-title")
-        layout.addWidget(title)
+        # ── Spinner + text row ────────────────────────────────────────
+        row = QHBoxLayout()
+        row.setSpacing(8)
 
-        self._rows: list[_StageRow] = []
-        for i, label in enumerate(STAGE_LABELS):
-            row = _StageRow(i, label)
-            self._rows.append(row)
-            layout.addWidget(row)
+        self._spinner_lbl = QLabel(_SPINNER_FRAMES[0])
+        self._spinner_lbl.setObjectName("pipeline-spinner")
+        self._spinner_lbl.setFixedWidth(20)
+        self._spinner_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._spinner_lbl.setVisible(False)
+        row.addWidget(self._spinner_lbl)
+
+        self._status_lbl = QLabel("Idle")
+        self._status_lbl.setObjectName("pipeline-stage-lbl")
+        self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        row.addWidget(self._status_lbl, stretch=1)
+
+        layout.addLayout(row)
+
+        # ── Thin progress bar ─────────────────────────────────────────
+        self._bar = QProgressBar()
+        self._bar.setObjectName("pipeline-bar")
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(4)
+        self._bar.setVisible(False)
+        layout.addWidget(self._bar)
+
+        # ── Timer for spinner animation ───────────────────────────────
+        self._timer = QTimer(self)
+        self._timer.setInterval(80)
+        self._timer.timeout.connect(self._tick)
+
+    # ── Public API (same as old PipelinePanel) ────────────────────────
 
     def set_stage_progress(self, stage: int, value: int, maximum: int = 100) -> None:
-        self._rows[stage].set_progress(value, maximum)
+        if maximum == 0:
+            self._bar.setRange(0, 0)
+        else:
+            self._bar.setRange(0, maximum)
+            self._bar.setValue(value)
+        self._bar.setVisible(True)
 
     def mark_running(self, stage: int) -> None:
-        self._rows[stage].set_progress(0, 100)
-        self._rows[stage].set_status("…", "running")
+        self._status_lbl.setText(_STAGE_RUNNING.get(stage, "Running …"))
+        self._bar.setRange(0, 0)   # indeterminate until real progress arrives
+        self._bar.setVisible(True)
+        self._start_spinner()
 
     def mark_done(self, stage: int) -> None:
-        self._rows[stage].set_progress(100, 100)
-        self._rows[stage].set_status("✓", "done")
+        self._status_lbl.setText(_STAGE_DONE.get(stage, "Done"))
+        self._bar.setRange(0, 100)
+        self._bar.setValue(100)
+        # Keep spinner running until the next mark_running or reset_all
+        if stage == max(_STAGE_DONE):
+            self._stop_spinner()
+            self._bar.setVisible(False)
 
     def mark_error(self, stage: int) -> None:
-        self._rows[stage].set_progress(0, 100)
-        self._rows[stage].set_status("✗", "error")
+        stage_name = _STAGE_RUNNING.get(stage, f"Stage {stage}").rstrip(" …")
+        self._status_lbl.setText(f"Error in {stage_name}")
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setVisible(False)
+        self._stop_spinner()
 
     def reset_all(self) -> None:
-        for row in self._rows:
-            row.reset()
+        self._stop_spinner()
+        self._status_lbl.setText("Idle")
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setVisible(False)
+
+    # ── Internal ──────────────────────────────────────────────────────
+
+    def _start_spinner(self) -> None:
+        self._spinning = True
+        self._spinner_lbl.setVisible(True)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _stop_spinner(self) -> None:
+        self._spinning = False
+        self._timer.stop()
+        self._spinner_lbl.setVisible(False)
+
+    def _tick(self) -> None:
+        self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        self._spinner_lbl.setText(_SPINNER_FRAMES[self._frame_idx])

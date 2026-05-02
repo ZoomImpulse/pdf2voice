@@ -385,6 +385,7 @@ class Pdf2VoiceApp(QMainWindow):
 
         w.book_ready.connect(self._on_book_ready)
         w.chapters_ready.connect(self._on_chapters_ready)
+        w.chapters_streaming.connect(self._on_chapters_streaming)
         w.chapter_running.connect(self._chapter_list.set_running)
         w.chapter_done.connect(self._chapter_list.set_done)
 
@@ -405,6 +406,11 @@ class Pdf2VoiceApp(QMainWindow):
     def _on_chapters_ready(self, chapters: list) -> None:
         self._chapter_list.load_chapters(chapters)
         self._preview_panel.show_placeholder()
+
+    @pyqtSlot(list)
+    def _on_chapters_streaming(self, chapters: list) -> None:
+        """Handle progressively streamed chapters during structuring."""
+        self._chapter_list.add_chapters(chapters)
 
     @pyqtSlot()
     def _on_awaiting_confirm(self) -> None:

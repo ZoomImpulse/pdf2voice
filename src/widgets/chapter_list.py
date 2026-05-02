@@ -165,6 +165,7 @@ class ChapterListPanel(QWidget):
     # ── Public API ────────────────────────────────────────────────────
 
     def load_chapters(self, chapters: list[tuple[int, str]]) -> None:
+        """Replace all chapters with the given list (full reload)."""
         while self._inner_layout.count() > 1:
             item = self._inner_layout.takeAt(0)
             if item and item.widget():
@@ -179,6 +180,18 @@ class ChapterListPanel(QWidget):
             self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
 
         n = len(chapters)
+        self._title_lbl.setText(f"Chapters  ·  {n}" if n else "Chapters")
+
+    def add_chapters(self, chapters: list[tuple[int, str]]) -> None:
+        """Add chapters progressively (for streaming during structuring)."""
+        for idx, title in chapters:
+            if idx not in self._cards:
+                card = _ChapterCard(idx, title)
+                card.clicked_sig.connect(self._on_card_clicked)
+                self._cards[idx] = card
+                self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
+
+        n = len(self._cards)
         self._title_lbl.setText(f"Chapters  ·  {n}" if n else "Chapters")
 
     def clear(self) -> None:

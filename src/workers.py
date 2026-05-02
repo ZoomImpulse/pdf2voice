@@ -22,6 +22,7 @@ class PipelineWorker(QThread):
     # ── Chapter signals ────────────────────────────────────────────────
     book_ready      = pyqtSignal(object)          # StructuredBook
     chapters_ready  = pyqtSignal(list)            # list[tuple[int, str]]
+    chapters_streaming = pyqtSignal(list)         # list[Chapter] — progressive updates during structuring
     chapter_running = pyqtSignal(int)
     chapter_done    = pyqtSignal(int)
 
@@ -97,6 +98,7 @@ class PipelineWorker(QThread):
         gender   = self.gender
 
         # ── Hash the PDF ───────────────────────────────────────────────
+        self.log_info.emit("Scanning PDF fingerprint …")
         pdf_hash = compute_pdf_hash(pdf_path)
 
         # ── Check for an existing session ──────────────────────────────
@@ -178,7 +180,30 @@ class PipelineWorker(QThread):
             def _llm_log(msg: str) -> None:
                 self.log_info.emit(msg)
 
-            book = structure_content(markdown, _llm_log)
+            def _chapters_streaming(chapters: list) -> None:
+                """Called when new chapters become available during structuring."""
+                # Emit signal for UI to display chapters progressively
+                for ch in chapters:
+                    self.chapters_streaming.emit([(ch.index, ch.title)])
+
+            def _check_structure_pause() -> None:
+                """Check for pause during structuring."""
+                while self._paused and not self._cancelled:
+                    self.msleep(150)
+                if self._cancelled:
+                    raise _Cancelled
+
+            def _llm_progress(token_count: int) -> None:
+                """Emit indeterminate progress for the progress bar while LLM streams."""
+                self.stage_progress.emit(1, token_count, 0)
+
+            book = structure_content(
+                markdown,
+                _llm_log,
+                chapters_cb=_chapters_streaming,
+                check_pause=_check_structure_pause,
+                progress_cb=_llm_progress,
+            )
             self.stage_done.emit(1)
             self.log_success.emit(
                 f'Structured: "{book.title}" — '

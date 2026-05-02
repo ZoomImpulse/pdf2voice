@@ -7,42 +7,26 @@ from typing import Callable
 
 import ollama
 
-from src.config import GENRE_PROMPTS, LLM_MODEL, TTS_CHUNK_SIZE, TTS_VOICE_INSTRUCT
+from src.config import GENRE_PROMPTS, LLM_MODEL, TTS_VOICE_INSTRUCT
+from src.pipeline.preprocessor import preprocess as _preprocess
 
 # Genre keys exposed to the LLM — must stay in sync with GENRE_PROMPTS in config.py.
 _GENRE_KEYS = list(GENRE_PROMPTS.keys())  # e.g. ["novel", "thriller", ...]
 
-SYSTEM_PROMPT = """\
-You are an assistant that prepares PDF content for text-to-speech (TTS) synthesis.
+# ── Lightweight metadata-only prompt ─────────────────────────────────────────
+# The structurer no longer sends the full document to the LLM.
+# Text cleaning, chapter detection, and TTS chunking are done by preprocessor.py.
+# The LLM only receives a short excerpt (~2 500 chars) and returns metadata.
+METADATA_PROMPT = """\
+You receive a short excerpt from a document. Return ONLY metadata as JSON.
+No explanation, no markdown fences, no extra keys.
 
-Your tasks:
-1. Detect the chapter structure from Markdown (# H1, ## H2 as chapter boundaries).
-2. Clean the text: remove page numbers, headers/footers, footnotes, URLs, and image captions.
-3. Expand abbreviations to their full form (e.g. → for example, etc. → et cetera, vs. → versus).
-4. Split each chapter into chunks of at most {{chunk_size}} characters (break only at sentence boundaries).
-5. Detect the primary language (de/en).
-6. Detect the subdivision label the book uses for its top-level divisions (e.g. "Kapitel", "Teil",
-   "Abschnitt", "Part", "Chapter", "Section", "Book", "Act", "Canto"). Use exactly the word the book
-   itself uses. If the divisions have no label (just numbers or no heading at all), use the most natural
-   word for the detected language ("Kapitel" for German, "Chapter" for English).
-   A division may also have no title — only a number or nothing. In that case set "title" to "".
-7. Classify the text into exactly one of the following genre keys:
-   {genre_keys}
-   Choose the single best-matching key. Return it as-is — do not invent new keys.
-
-Respond ONLY with valid JSON — no Markdown code fences, no explanations:
+JSON format:
 {{
   "title": "Document title",
-  "language": "de",
-  "genre": "one of the genre keys listed above",
-  "subdivision_type": "Kapitel",
-  "chapters": [
-    {{
-      "index": 1,
-      "title": "Chapter name or empty string if untitled",
-      "chunks": ["Chunk text 1", "Chunk text 2"]
-    }}
-  ]
+  "language": "de or en",
+  "genre": "one of: {genre_keys}",
+  "subdivision_type": "word the book uses for chapters, e.g. Kapitel, Teil, Chapter, Part, Section — or empty string if unclear"
 }}
 """
 
@@ -71,79 +55,87 @@ class StructuredBook:
 def structure_content(
     markdown: str,
     log_cb: Callable[[str], None] | None = None,
+    chapters_cb: Callable[[list[Chapter]], None] | None = None,
+    check_pause: Callable[[], None] | None = None,
+    progress_cb: Callable[[int], None] | None = None,
     model: str = LLM_MODEL,
 ) -> StructuredBook:
-    system = SYSTEM_PROMPT.format(
-        chunk_size=TTS_CHUNK_SIZE,
-        genre_keys=", ".join(f'"{k}"' for k in _GENRE_KEYS),
-    )
+    """Structure markdown content for TTS generation.
 
+    Pipeline:
+    1. preprocessor.py cleans the text, detects chapters, expands abbreviations,
+       and produces TTS chunks — all without any LLM call.
+    2. A short excerpt (~2 500 chars) is sent to the LLM to detect language and genre.
+    3. Results are merged into a StructuredBook.
+    """
+    # ── Step 1: pre-process (no LLM) ─────────────────────────────────────────
     if log_cb:
-        log_cb(f"LLM: Sending {len(markdown):,} characters to {model} ...")
+        log_cb("Preprocessing: Text wird bereinigt und Kapitelstruktur extrahiert …")
 
-    response = ollama.chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": markdown},
-        ],
-        options={"temperature": 0.2, "num_ctx": 32768},
-        stream=False,
-    )
+    pre = _preprocess(markdown)
 
-    raw = _strip_code_fences(response["message"]["content"].strip())
-
-    if log_cb:
-        log_cb("LLM: Response received, parsing JSON ...")
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        data = _fallback_parse(markdown)
-        if log_cb:
-            log_cb("LLM: JSON parsing failed — using fallback structure")
-
-    raw_subdivision = data.get("subdivision_type", "").strip()
-
-    seen_indices: set[int] = set()
-    chapters: list[Chapter] = []
-    for i, ch in enumerate(data.get("chapters", [])):
-        if not (ch.get("chunks") or ch.get("text")):
-            continue
-        idx = ch.get("index", i + 1)
-        if idx in seen_indices:
-            if log_cb:
-                log_cb(f"LLM: Duplicate chapter index {idx} skipped")
-            continue
-        seen_indices.add(idx)
-        raw_title = ch.get("title", f"Chapter {i + 1}")
-        chapters.append(Chapter(
-            index=idx,
-            title=_strip_label_prefix(raw_title, idx, raw_subdivision),
-            chunks=ch.get("chunks", [ch.get("text", "")]),
-        ))
-
+    chapters: list[Chapter] = [
+        Chapter(index=i + 1, title=raw.title, chunks=raw.chunks)
+        for i, raw in enumerate(pre.chapters)
+    ]
     if not chapters:
-        chapters = _split_into_chunks(markdown)
-        if log_cb:
-            log_cb("LLM: No chapters detected — treating document as one chapter")
+        # Fallback: treat the whole document as one chapter
+        from src.pipeline.preprocessor import _chunk_text as _pp_chunk
+        chapters = [Chapter(index=1, title="", chunks=_pp_chunk(markdown))]
 
-    genre            = data.get("genre", "").strip().lower()
-    voice_instruct   = GENRE_PROMPTS.get(genre, TTS_VOICE_INSTRUCT)
-    language         = data.get("language", "en")
-    subdivision_type = data.get("subdivision_type", "").strip()
+    # Stream all chapters to the UI immediately — no need to wait for the LLM
+    if chapters_cb and chapters:
+        chapters_cb(chapters)
+
+    if log_cb:
+        total_chunks = sum(len(ch.chunks) for ch in chapters)
+        log_cb(
+            f"Preprocessing: {len(chapters)} Kapitel, {total_chunks} Chunks "
+            f"({len(markdown):,} → {sum(len(c) for ch in chapters for c in ch.chunks):,} Zeichen)"
+        )
+
+    # ── Step 2: LLM metadata detection (tiny sample only) ────────────────────
+    title            = pre.title
+    language         = pre.language          # heuristic — overridden by LLM if available
+    genre            = ""
+    subdivision_type = pre.subdivision_type  # pattern-detected — overridden by LLM if needed
+
+    if log_cb:
+        log_cb(f"LLM: Metadaten werden erkannt ({len(pre.sample):,} Zeichen) …")
+
+    meta = _call_llm_for_metadata(pre.sample, model, log_cb, check_pause, progress_cb)
+    if meta:
+        title            = meta.get("title", title) or title
+        language         = meta.get("language", language) or language
+        genre            = meta.get("genre", "").strip().lower()
+        llm_subdiv       = meta.get("subdivision_type", "").strip()
+        if llm_subdiv and not subdivision_type:
+            subdivision_type = llm_subdiv
+
     if not subdivision_type:
         subdivision_type = "Kapitel" if language == "de" else "Chapter"
 
+    # Strip "Kapitel 3 " prefixes that the preprocessor may have left in titles
+    chapters = [
+        Chapter(
+            index=ch.index,
+            title=_strip_label_prefix(ch.title, ch.index, subdivision_type),
+            chunks=ch.chunks,
+        )
+        for ch in chapters
+    ]
+
+    voice_instruct = GENRE_PROMPTS.get(genre, TTS_VOICE_INSTRUCT)
+
     if log_cb and genre:
-        log_cb(f"LLM: Detected genre: {genre}")
+        log_cb(f"LLM: Genre erkannt: {genre}")
     if log_cb:
-        log_cb(f"LLM: Subdivision type: {subdivision_type}")
+        log_cb(f"LLM: Unterteilungstyp: {subdivision_type}")
     if log_cb and voice_instruct:
-        log_cb(f"LLM: Voice instruction: {voice_instruct}")
+        log_cb(f"LLM: Stimmanweisung: {voice_instruct[:60]}…")
 
     return StructuredBook(
-        title=data.get("title", "Document"),
+        title=title,
         language=language,
         genre=genre,
         subdivision_type=subdivision_type,
@@ -152,19 +144,81 @@ def structure_content(
     )
 
 
-def _strip_label_prefix(title: str, index: int, subdivision_type: str) -> str:
-    """Remove leading '{subdivision_type} {index}' from a title if the LLM included it.
+# ── LLM helper (metadata only) ────────────────────────────────────────────────
 
-    E.g. "Kapitel 2 Die Suche" → "Die Suche" when subdivision_type="Kapitel", index=2.
-    """
+_LOG_TOKEN_INTERVAL = 50  # small — metadata responses are short
+
+
+def _call_llm_for_metadata(
+    sample: str,
+    model: str,
+    log_cb: Callable[[str], None] | None = None,
+    check_pause: Callable[[], None] | None = None,
+    progress_cb: Callable[[int], None] | None = None,
+) -> dict | None:
+    """Send a short sample to the LLM and return {title, language, genre, subdivision_type}."""
+    if check_pause:
+        check_pause()
+    system = METADATA_PROMPT.format(
+        genre_keys=", ".join(f'"{k}"' for k in _GENRE_KEYS),
+    )
+    try:
+        if log_cb:
+            log_cb("LLM: Warte auf Modellantwort …")
+        stream = ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": sample},
+            ],
+            options={
+                "temperature": 0.3,
+                "top_p": 0.8,
+                "top_k": 20,
+                "min_p": 0,
+                "num_ctx": 4096,   # tiny context — sample is ≤2 500 chars
+                "num_gpu": 99,
+            },
+            think=False,
+            stream=True,
+        )
+        parts: list[str] = []
+        token_count = 0
+        last_logged = 0
+        for chunk in stream:
+            token = chunk["message"]["content"]
+            parts.append(token)
+            token_count += 1
+            if progress_cb:
+                progress_cb(token_count)
+            if log_cb and token_count - last_logged >= _LOG_TOKEN_INTERVAL:
+                log_cb(f"LLM: {token_count} Tokens empfangen …")
+                last_logged = token_count
+        if log_cb:
+            log_cb(f"LLM: Metadaten empfangen ({token_count} Tokens)")
+        raw = _strip_code_fences("".join(parts).strip())
+        return json.loads(raw)
+    except (json.JSONDecodeError, KeyError) as e:
+        if log_cb:
+            log_cb(f"LLM: Metadaten-Parse fehlgeschlagen ({e}) — Standardwerte werden verwendet")
+        return None
+    except Exception as e:
+        if log_cb:
+            log_cb(f"LLM: Metadaten-Erkennung fehlgeschlagen ({e}) — Standardwerte werden verwendet")
+        return None
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+def _strip_label_prefix(title: str, index: int, subdivision_type: str) -> str:
+    """Remove leading '{subdivision_type} {index}' from a chapter title."""
     if not title or not subdivision_type:
         return title
     pattern = re.compile(
         r"^" + re.escape(subdivision_type) + r"\s+" + re.escape(str(index)) + r"[\s:.\-–—]*",
         re.IGNORECASE,
     )
-    stripped = pattern.sub("", title).strip()
-    return stripped
+    return pattern.sub("", title).strip()
 
 
 def _strip_code_fences(text: str) -> str:
@@ -172,49 +226,3 @@ def _strip_code_fences(text: str) -> str:
     text = re.sub(r"\s*```$",          "", text, flags=re.MULTILINE)
     return text.strip()
 
-
-def _fallback_parse(markdown: str) -> dict:
-    chapters: list[dict] = []
-    current_title = "Document"
-    current_text: list[str] = []
-
-    for line in markdown.splitlines():
-        if line.startswith("# "):
-            if current_text:
-                chapters.append({
-                    "index": len(chapters) + 1,
-                    "title": current_title,
-                    "chunks": _chunk_text("\n".join(current_text)),
-                })
-                current_text = []
-            current_title = line.lstrip("# ").strip()
-        else:
-            current_text.append(line)
-
-    if current_text:
-        chapters.append({
-            "index": len(chapters) + 1,
-            "title": current_title,
-            "chunks": _chunk_text("\n".join(current_text)),
-        })
-
-    return {"title": "Document", "language": "en", "genre": "", "subdivision_type": "Chapter", "voice_instruct": "", "chapters": chapters}
-
-
-def _split_into_chunks(text: str) -> list[Chapter]:
-    return [Chapter(index=1, title="Document", chunks=_chunk_text(text))]
-
-
-def _chunk_text(text: str) -> list[str]:
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    chunks: list[str] = []
-    current = ""
-    for sentence in sentences:
-        if len(current) + len(sentence) + 1 > TTS_CHUNK_SIZE and current:
-            chunks.append(current.strip())
-            current = sentence
-        else:
-            current = (current + " " + sentence).strip() if current else sentence
-    if current:
-        chunks.append(current.strip())
-    return [c for c in chunks if c.strip()]

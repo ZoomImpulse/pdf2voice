@@ -206,9 +206,9 @@ def _generate_anchor(
     anchor_text = _ANCHOR_TEXTS.get(language.lower(), _ANCHOR_TEXT_DEFAULT)
 
     if log_cb:
-        log_cb(f"Voice Anchor: Loading {TTS_DESIGN_MODEL} ...")
+        log_cb(f"Voice Anchor: Lade Modell {TTS_DESIGN_MODEL} …")
     if anchor_cb:
-        anchor_cb(10.0)
+        anchor_cb(5.0)
 
     tts = Qwen3TTSModel.from_pretrained(
         TTS_DESIGN_MODEL,
@@ -220,9 +220,9 @@ def _generate_anchor(
         return None
 
     if log_cb:
-        log_cb(f"Voice Anchor: Generating voice reference (language: {language}) ...")
+        log_cb("Voice Anchor: Modell geladen — generiere Stimmreferenz …")
     if anchor_cb:
-        anchor_cb(40.0)
+        anchor_cb(35.0)
 
     wavs, sr = tts.generate_voice_design(
         text=anchor_text,
@@ -234,14 +234,19 @@ def _generate_anchor(
     sf.write(str(anchor_path), wavs[0], sr)
 
     if log_cb:
-        log_cb(f"Voice Anchor: Reference saved ({len(wavs[0]) / sr:.1f}s)")
+        log_cb(f"Voice Anchor: Referenz gespeichert ({len(wavs[0]) / sr:.1f}s)")
     if anchor_cb:
-        anchor_cb(70.0)
+        anchor_cb(60.0)
 
+    if log_cb:
+        log_cb("Voice Anchor: VoiceDesign-Modell wird entladen …")
     del tts
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+    if anchor_cb:
+        anchor_cb(70.0)
 
     return anchor_path
 
@@ -255,7 +260,9 @@ def _load_base_and_prompt(
     from qwen_tts import Qwen3TTSModel
 
     if log_cb:
-        log_cb(f"Voice Anchor: Loading {TTS_BASE_MODEL} for voice cloning ...")
+        log_cb(f"Voice Anchor: Lade TTS-Basismodell {TTS_BASE_MODEL} …")
+    if anchor_cb:
+        anchor_cb(75.0)
 
     tts = Qwen3TTSModel.from_pretrained(
         TTS_BASE_MODEL,
@@ -263,13 +270,18 @@ def _load_base_and_prompt(
         dtype=torch.bfloat16 if device != "cpu" else torch.float32,
     )
 
+    if log_cb:
+        log_cb("Voice Anchor: Extrahiere Stimmprofil aus Referenzaudio …")
+    if anchor_cb:
+        anchor_cb(90.0)
+
     voice_prompt = tts.create_voice_clone_prompt(
         ref_audio=str(anchor_path),
         x_vector_only_mode=True,
     )
 
     if log_cb:
-        log_cb("Voice Anchor: Voice profile extracted — voice locked in.")
+        log_cb("Voice Anchor: Stimmprofil gesichert — Stimme ist bereit.")
     if anchor_cb:
         anchor_cb(100.0)
 
