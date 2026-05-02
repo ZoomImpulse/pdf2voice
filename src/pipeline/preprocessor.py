@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 
 from src.config import TTS_CHUNK_SIZE
 
+_SILENCE_CHUNK_S: float = 0.6  # silence after a mid-paragraph chunk
+_SILENCE_PARA_S:  float = 1.2  # silence after the last chunk of a paragraph
 
 # ── Abbreviation dictionaries ─────────────────────────────────────────────────
 # Keys are raw regex patterns (without word-boundary anchors — added dynamically).
@@ -112,6 +114,7 @@ _ABBREV_EN: dict[str, str] = {
 class RawChapter:
     title: str
     chunks: list[str] = field(default_factory=list)
+    chunk_pauses: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -136,9 +139,18 @@ def preprocess(markdown: str) -> PreprocessResult:
     chapters: list[RawChapter] = []
     for ch_title, ch_text in chapters_raw:
         expanded = _expand_abbreviations(ch_text, lang)
-        chunks = _chunk_text(expanded)
+        chunks: list[str] = []
+        pauses: list[float] = []
+        for para in re.split(r"\n{2,}", expanded):
+            para = para.strip()
+            if not para:
+                continue
+            para_chunks = _chunk_text(para)
+            for i, chunk in enumerate(para_chunks):
+                chunks.append(chunk)
+                pauses.append(_SILENCE_PARA_S if i == len(para_chunks) - 1 else _SILENCE_CHUNK_S)
         if chunks:
-            chapters.append(RawChapter(title=ch_title, chunks=chunks))
+            chapters.append(RawChapter(title=ch_title, chunks=chunks, chunk_pauses=pauses))
 
     # Build a compact sample for the LLM (language + genre detection only)
     sample_parts: list[str] = []
@@ -166,17 +178,55 @@ def _clean(text: str) -> str:
     # 1. Remove Docling image / figure / formula / table placeholders
     text = re.sub(r"<!--\s*(?:image|figure|formula|table)\s*-->", "", text, flags=re.IGNORECASE)
 
-    # 2. Remove bare URLs
+    # 2. Remove fenced code blocks (not meaningful as spoken audio)
+    text = re.sub(r"```[\s\S]*?```", "", text)
+
+    # 3. Strip markdown table separator rows (|---|---|)
+    text = re.sub(r"^\|[\s\-:|]+\|\s*$", "", text, flags=re.MULTILINE)
+
+    # 4. Strip table pipe delimiters from data rows — keep cell text, join with spaces
+    text = re.sub(
+        r"^\|(.+?)\|\s*$",
+        lambda m: "  ".join(c.strip() for c in m.group(1).split("|") if c.strip()),
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # 5. Remove bare URLs
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"www\.\S+", "", text)
 
-    # 3. Remove footnote definitions:  [^1]: explanation text
+    # 6. Remove footnote definitions:  [^1]: explanation text
     text = re.sub(r"^\[\^[^\]]+\]:.*$", "", text, flags=re.MULTILINE)
 
-    # 4. Remove inline footnote references:  [^1]
+    # 7. Remove inline footnote references:  [^1]
     text = re.sub(r"\[\^[^\]]+\]", "", text)
 
-    # 5. Remove lines that are only a number (page numbers) or only Roman numerals
+    # 7b. Strip markdown links but preserve the link text: [text](url) → text
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+
+    # 7c. Strip editorial bracket annotations — keep inner text: [Job] → Job
+    text = re.sub(r"\[([^\]]+)\]", r"\1", text)
+
+    # 8. Strip H3–H6 heading markers (keep the heading text as readable prose)
+    text = re.sub(r"^#{3,6}\s+", "", text, flags=re.MULTILINE)
+
+    # 9. Strip bold/italic markers — longest pattern first to avoid partial matches
+    text = re.sub(r"\*{3}(.+?)\*{3}", r"\1", text)  # ***bold italic***
+    text = re.sub(r"\*{2}(.+?)\*{2}", r"\1", text)  # **bold**
+    text = re.sub(r"_{2}(.+?)_{2}",   r"\1", text)  # __bold__
+    text = re.sub(r"\*(.+?)\*",       r"\1", text)  # *italic*
+
+    # 10. Strip inline code backticks (keep the code text itself)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+
+    # 11. Strip bullet list markers (-, *, +)
+    text = re.sub(r"^[ \t]*[-*+]\s+", "", text, flags=re.MULTILINE)
+
+    # 12. Strip ordered list markers (1. or 1))
+    text = re.sub(r"^[ \t]*\d+[.)]\s+", "", text, flags=re.MULTILINE)
+
+    # 13. Remove lines that are only a number (page numbers) or only Roman numerals
     text = re.sub(
         r"^\s*(?:M{0,4}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})|\d+)\s*$",
         "",
@@ -184,10 +234,22 @@ def _clean(text: str) -> str:
         flags=re.MULTILINE | re.IGNORECASE,
     )
 
-    # 6. Remove frequently repeating lines (running headers / footers)
+    # 13b. Expand scripture chapter:verse notation for clean TTS: 38:4-7 → 38, 4 to 7
+    text = re.sub(
+        r"\b(\d+):(\d+)(?:[-–](\d+))?",
+        lambda m: f"{m.group(1)}, {m.group(2)}" + (f" to {m.group(3)}" if m.group(3) else ""),
+        text,
+    )
+
+    # 13c. Remove inline verse numbers between sentences: "earth? 5 Who" → "earth? Who"
+    text = re.sub(r"(?<=[.!?])\s+\d{1,3}\s+(?=[A-Z])", " ", text)
+    # Remove a leading verse number at paragraph start: "4 Where" → "Where"
+    text = re.sub(r"(?m)^\d{1,3}\s+(?=[A-Z])", "", text)
+
+    # 14. Remove frequently repeating lines (running headers / footers)
     text = _remove_repeated_lines(text, min_occurrences=3)
 
-    # 7. Collapse excessive blank lines
+    # 15. Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()

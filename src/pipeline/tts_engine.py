@@ -20,6 +20,9 @@ from src.pipeline.session import BookSession
 
 ChunkCallback = Callable[[int, int, int, int], None]
 
+_SILENCE_TITLE_S: float = 1.0  # pause after chapter title announcement
+_SILENCE_CHUNK_S: float = 0.6  # fallback when chunk_pauses is missing
+
 _ANCHOR_TEXTS: dict[str, str] = {
     "de": (
         "Willkommen zu diesem Hörbuch. Ich werde Ihr Vorleser auf dieser Reise sein. "
@@ -121,6 +124,7 @@ def generate_audiobook(
             log_cb(f"TTS: Chapter {chapter.index}/{total_chapters} — {chapter.title}")
 
         chunk_wavs: list[tuple[object, int]] = []
+        chunk_pauses_out: list[float] = []
 
         # ── Chapter title announcement ────────────────────────────────
         title_text = _chapter_title_text(chapter.index, chapter.title, book.subdivision_type)
@@ -128,9 +132,10 @@ def generate_audiobook(
             wavs, sr = tts.generate_voice_clone(
                 text=title_text,
                 voice_clone_prompt=voice_prompt,
-                language="Auto",
+                language=book.language,
             )
             chunk_wavs.append((wavs[0], sr))
+            chunk_pauses_out.append(_SILENCE_TITLE_S)
         except Exception as exc:
             if log_cb:
                 log_cb(f"TTS: Chapter title error ({exc}), skipping title")
@@ -146,9 +151,15 @@ def generate_audiobook(
                 wavs, sr = tts.generate_voice_clone(
                     text=chunk_text,
                     voice_clone_prompt=voice_prompt,
-                    language="Auto",
+                    language=book.language,
                 )
                 chunk_wavs.append((wavs[0], sr))
+                pause = (
+                    chapter.chunk_pauses[ck_idx]
+                    if ck_idx < len(chapter.chunk_pauses)
+                    else _SILENCE_CHUNK_S
+                )
+                chunk_pauses_out.append(pause)
             except Exception as exc:
                 if log_cb:
                     log_cb(f"TTS: Chunk error ({exc}), skipping")
@@ -165,7 +176,7 @@ def generate_audiobook(
                 )
 
         if chunk_wavs:
-            _merge_and_save(chunk_wavs, chapter_path, log_cb)
+            _merge_and_save(chunk_wavs, chapter_path, log_cb, chunk_pauses_out)
             output_paths.append(chapter_path)
             if session is not None:
                 session.mark_chapter_done(chapter.index, chapter_path)
@@ -227,7 +238,7 @@ def _generate_anchor(
     wavs, sr = tts.generate_voice_design(
         text=anchor_text,
         instruct=voice_instruct,
-        language="Auto",
+        language=language,
     )
 
     anchor_path = output_path or (OUTPUT_DIR / ".voice_anchor.wav")
@@ -314,20 +325,29 @@ def _resolve_device(log_cb: Callable[[str], None] | None = None) -> str:
     return wanted
 
 
+def _normalize_rms(wav: "np.ndarray", target_rms: float = 0.08) -> "np.ndarray":
+    import numpy as np
+    rms = float(np.sqrt(np.mean(wav ** 2)))
+    if rms < 1e-6:
+        return wav
+    return np.clip(wav * (target_rms / rms), -1.0, 1.0)
+
+
 def _merge_and_save(
     chunk_wavs: list[tuple[object, int]],
     output: Path,
     log_cb: Callable[[str], None] | None = None,
+    pauses: list[float] | None = None,
 ) -> None:
     import numpy as np
 
-    sr      = chunk_wavs[0][1]
-    silence = np.zeros(int(0.6 * sr), dtype=np.float32)
+    sr = chunk_wavs[0][1]
     parts: list[np.ndarray] = []
     for i, (wav, _) in enumerate(chunk_wavs):
-        parts.append(np.asarray(wav, dtype=np.float32))
+        parts.append(_normalize_rms(np.asarray(wav, dtype=np.float32)))
         if i < len(chunk_wavs) - 1:
-            parts.append(silence)
+            pause_s = pauses[i] if pauses and i < len(pauses) else _SILENCE_CHUNK_S
+            parts.append(np.zeros(int(pause_s * sr), dtype=np.float32))
 
     combined = np.concatenate(parts)
     sf.write(str(output), combined, sr)

@@ -36,6 +36,7 @@ class Chapter:
     index: int
     title: str
     chunks: list[str] = field(default_factory=list)
+    chunk_pauses: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -75,13 +76,15 @@ def structure_content(
     pre = _preprocess(markdown)
 
     chapters: list[Chapter] = [
-        Chapter(index=i + 1, title=raw.title, chunks=raw.chunks)
+        Chapter(index=i + 1, title=raw.title, chunks=raw.chunks, chunk_pauses=raw.chunk_pauses)
         for i, raw in enumerate(pre.chapters)
     ]
     if not chapters:
         # Fallback: treat the whole document as one chapter
-        from src.pipeline.preprocessor import _chunk_text as _pp_chunk
-        chapters = [Chapter(index=1, title="", chunks=_pp_chunk(markdown))]
+        from src.pipeline.preprocessor import _chunk_text as _pp_chunk, _SILENCE_PARA_S
+        fallback_chunks = _pp_chunk(markdown)
+        chapters = [Chapter(index=1, title="", chunks=fallback_chunks,
+                            chunk_pauses=[_SILENCE_PARA_S] * len(fallback_chunks))]
 
     # Stream all chapters to the UI immediately — no need to wait for the LLM
     if chapters_cb and chapters:
