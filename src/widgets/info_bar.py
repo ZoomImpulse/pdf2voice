@@ -1,6 +1,7 @@
 """pdf2voice — Info bar: three side-by-side cards at the top of the window."""
 from __future__ import annotations
 
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -11,11 +12,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.config import LLM_MODEL, OUTPUT_DIR, TTS_BASE_MODEL, TTS_DESIGN_MODEL, TTS_GENDER
+from src.config import LLM_MODEL, OUTPUT_DIR, TTS_BASE_MODEL, TTS_DESIGN_MODEL
 
 
 class InfoBar(QFrame):
     """Horizontal row of three info/config cards."""
+
+    pdf_selected = pyqtSignal(str)  # emitted when the user picks a PDF via Browse
 
     def __init__(self, initial_path: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -45,6 +48,7 @@ class InfoBar(QFrame):
         self._path_edit = QLineEdit(initial_path)
         self._path_edit.setObjectName("path-edit")
         self._path_edit.setPlaceholderText("Path to PDF file …")
+        self._path_edit.setReadOnly(True)
         layout.addWidget(self._path_edit)
 
         self._browse_btn = QPushButton("Browse …")
@@ -87,7 +91,7 @@ class InfoBar(QFrame):
         self._btn_male.setFixedHeight(34)
         self._btn_male.clicked.connect(lambda: self._select_gender("male"))
 
-        self._select_gender(TTS_GENDER)
+        # No default — user must choose
 
         toggle_row.addWidget(self._btn_female)
         toggle_row.addWidget(self._btn_male)
@@ -150,14 +154,25 @@ class InfoBar(QFrame):
         )
         if path:
             self._path_edit.setText(path)
+            self.pdf_selected.emit(path)
 
     # ── Public API ────────────────────────────────────────────────────
 
     def get_pdf_path(self) -> str:
         return self._path_edit.text().strip()
 
+    def set_pdf_path(self, path: str) -> None:
+        self._path_edit.setText(path)
+
     def get_gender(self) -> str:
-        return "female" if self._btn_female.isChecked() else "male"
+        if self._btn_female.isChecked():
+            return "female"
+        if self._btn_male.isChecked():
+            return "male"
+        return ""
+
+    def set_gender(self, gender: str) -> None:
+        self._select_gender(gender)
 
     def set_pdf_info(self, info: str) -> None:
         if info:
@@ -167,7 +182,6 @@ class InfoBar(QFrame):
             self._pdf_info_lbl.setVisible(False)
 
     def set_controls_enabled(self, enabled: bool) -> None:
-        self._path_edit.setEnabled(enabled)
         self._browse_btn.setEnabled(enabled)
         self._btn_female.setEnabled(enabled)
         self._btn_male.setEnabled(enabled)

@@ -12,25 +12,23 @@ LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen3:8b")
 # 16 384 is a safe default for 8-12 GB GPUs.  Increase if you have more VRAM.
 LLM_CTX: int = int(os.getenv("LLM_CTX", "16384"))
 
-# PDF Extraction: Uses Docling with OCR disabled for layout-aware, memory-efficient extraction.
-# No system dependencies required — uses Docling's native layout models.
-# Install: pip install docling
-PDF_EXTRACTOR: str = "docling"  # Layout-aware PDF parsing, OCR disabled
+# PDF Extraction: uses pymupdf4llm for reliable page-by-page text extraction.
+# Install: pip install pymupdf4llm
 
-# Phase 1: VoiceDesign — generiert den Stimm-Anker (kurze Referenz-Audio)
+# Phase 1: VoiceDesign — generates the voice anchor (short reference audio)
 TTS_DESIGN_MODEL: str = os.getenv(
     "TTS_DESIGN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
 )
 
-# Phase 2: Base — klont die Anker-Stimme für alle Content-Chunks (konsistent)
+# Phase 2: Base — clones the anchor voice for all content chunks (consistent)
 TTS_BASE_MODEL: str = os.getenv(
     "TTS_BASE_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 )
 
-# Geschlecht des Sprechers (wird in die VoiceDesign-Instruction eingebaut)
+# Narrator gender (injected into the VoiceDesign instruction at runtime)
 TTS_GENDER: str = os.getenv("TTS_GENDER", "female")  # "female" | "male"
 
-# VoiceDesign-Instruction (Basisstil ohne Geschlecht — wird zur Laufzeit ergänzt)
+# VoiceDesign instruction (base style without gender — extended at runtime)
 TTS_VOICE_INSTRUCT: str = os.getenv(
     "TTS_VOICE_INSTRUCT",
     (
@@ -111,9 +109,6 @@ ADAPTATION_ENABLED: bool = os.getenv("ADAPTATION_ENABLED", "true").lower() == "t
 
 # "ollama" uses the local Ollama server; "openrouter" uses the cloud API.
 ADAPTATION_PROVIDER: str = os.getenv("ADAPTATION_PROVIDER", "ollama")  # "ollama"|"openrouter"
-
-# Ollama adaptation model — can be smaller/faster than the structuring model.
-ADAPTATION_MODEL: str = os.getenv("ADAPTATION_MODEL", LLM_MODEL)
 
 # OpenRouter settings — only needed when ADAPTATION_PROVIDER=openrouter.
 # Recommended cost-efficient model: anthropic/claude-haiku-4-5

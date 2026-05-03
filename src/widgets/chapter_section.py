@@ -1,12 +1,13 @@
 """pdf2voice — Chapter section: expandable chapter cards with inline preview."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTextEdit,
     QVBoxLayout,
@@ -308,14 +309,17 @@ class _ExpandableChapterCard(QFrame):
         text = self._text_edit.toPlainText().strip()
         self._in_edit_mode = False
         self.edit_saved.emit(self._index, text)
+        self._render_read_only()
 
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _clear_content(self) -> None:
         while self._content_layout.count():
             item = self._content_layout.takeAt(0)
-            if item and item.widget():
+            if item.widget():
                 item.widget().deleteLater()
+            elif item.layout():
+                _delete_layout(item.layout())
 
     def _expand_visual(self) -> None:
         self._expanded = True
@@ -325,6 +329,15 @@ class _ExpandableChapterCard(QFrame):
         self._hdr.setObjectName("exp-card-header-active")
         self._hdr.style().unpolish(self._hdr)
         self._hdr.style().polish(self._hdr)
+        QTimer.singleShot(0, self._scroll_into_view)
+
+    def _scroll_into_view(self) -> None:
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(self._content, 0, 20)
+                break
+            parent = parent.parent()
 
     def _collapse(self) -> None:
         self._expanded = False
@@ -339,6 +352,15 @@ class _ExpandableChapterCard(QFrame):
         self._dot.setObjectName(_DOT_OBJ[state])
         self._dot.style().unpolish(self._dot)
         self._dot.style().polish(self._dot)
+
+
+def _delete_layout(layout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _delete_layout(item.layout())
 
 
 class ChapterSection(QFrame):

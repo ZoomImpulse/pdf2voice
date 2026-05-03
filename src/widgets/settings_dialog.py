@@ -55,17 +55,13 @@ class SettingsDialog(QDialog):
         body_layout.addLayout(form)
         body_layout.addStretch()
 
-        # ── LLM / Ollama ──────────────────────────────────────────────
-        form.addRow(self._section_header("LLM / Ollama"))
-        self._ollama_url = self._line(form, "Ollama URL:", cfg.OLLAMA_URL, "http://localhost:11434")
-        self._llm_model  = self._line(form, "LLM model:", cfg.LLM_MODEL, "qwen3:8b")
-        self._llm_ctx    = self._line(form, "Context window (tokens):", str(cfg.LLM_CTX), "16384")
+        self._form = form  # needed for label lookups in _update_visibility
 
         # ── TTS ───────────────────────────────────────────────────────
         form.addRow(self._section_header("Text-to-Speech"))
         self._tts_device = QComboBox()
-        self._tts_device.addItems(["cuda", "cuda:0", "cuda:1", "cpu"])
-        current_device = cfg.TTS_DEVICE if cfg.TTS_DEVICE in ["cuda", "cuda:0", "cuda:1", "cpu"] else "cuda"
+        self._tts_device.addItems(["cuda", "cpu"])
+        current_device = cfg.TTS_DEVICE if cfg.TTS_DEVICE in ["cuda", "cpu"] else "cuda"
         self._tts_device.setCurrentText(current_device)
         form.addRow("Device:", self._tts_device)
         self._tts_chunk  = self._line(form, "Chunk size (chars):", str(cfg.TTS_CHUNK_SIZE), "3000")
@@ -108,14 +104,17 @@ class SettingsDialog(QDialog):
         self._provider_combo.currentTextChanged.connect(self._update_visibility)
         form.addRow("Provider:", self._provider_combo)
 
-        self._adapt_model = self._line(form, "Ollama adapt model:", cfg.ADAPTATION_MODEL, "qwen3:8b")
+        # Ollama-specific fields
+        self._ollama_url = self._line(form, "Ollama URL:", cfg.OLLAMA_URL, "http://localhost:11434")
+        self._llm_model  = self._line(form, "LLM model:", cfg.LLM_MODEL, "qwen3:8b")
+        self._llm_ctx    = self._line(form, "Context window (tokens):", str(cfg.LLM_CTX), "16384")
 
+        # OpenRouter-specific fields
         self._or_key = QLineEdit(cfg.OPENROUTER_API_KEY)
         self._or_key.setPlaceholderText("sk-or-…")
         self._or_key.setEchoMode(QLineEdit.EchoMode.Password)
         self._or_key.setObjectName("settings-input")
         form.addRow("OpenRouter key:", self._or_key)
-
         self._or_model = self._line(form, "OpenRouter model:", cfg.OPENROUTER_MODEL, "deepseek/deepseek-v4-flash")
 
         # ── Hint + buttons ────────────────────────────────────────────
@@ -205,9 +204,18 @@ class SettingsDialog(QDialog):
         enabled   = self._adapt_enabled.isChecked()
         is_ollama = self._provider_combo.currentText() == "ollama"
         self._provider_combo.setEnabled(enabled)
-        self._adapt_model.setEnabled(enabled and is_ollama)
-        self._or_key.setEnabled(enabled and not is_ollama)
-        self._or_model.setEnabled(enabled and not is_ollama)
+        self._set_row_visible(self._ollama_url, enabled and is_ollama)
+        self._set_row_visible(self._llm_model,  enabled and is_ollama)
+        self._set_row_visible(self._llm_ctx,    enabled and is_ollama)
+        self._set_row_visible(self._or_key,     enabled and not is_ollama)
+        self._set_row_visible(self._or_model,   enabled and not is_ollama)
+
+    def _set_row_visible(self, field: QWidget, visible: bool) -> None:
+        """Show or hide a form row (label + field) by field widget."""
+        field.setVisible(visible)
+        lbl = self._form.labelForField(field)
+        if lbl:
+            lbl.setVisible(visible)
 
     def _save(self) -> None:
         import src.config as cfg
@@ -230,7 +238,6 @@ class SettingsDialog(QDialog):
         cfg.OUTPUT_DIR         = Path(s(self._output_dir) or str(cfg.OUTPUT_DIR))
         cfg.ADAPTATION_ENABLED  = self._adapt_enabled.isChecked()
         cfg.ADAPTATION_PROVIDER = self._provider_combo.currentText()
-        cfg.ADAPTATION_MODEL    = s(self._adapt_model) or cfg.ADAPTATION_MODEL
         cfg.OPENROUTER_API_KEY  = s(self._or_key)
         cfg.OPENROUTER_MODEL    = s(self._or_model)    or cfg.OPENROUTER_MODEL
 
@@ -252,7 +259,6 @@ class SettingsDialog(QDialog):
             "OUTPUT_DIR":          str(cfg.OUTPUT_DIR),
             "ADAPTATION_ENABLED":  str(cfg.ADAPTATION_ENABLED).lower(),
             "ADAPTATION_PROVIDER": cfg.ADAPTATION_PROVIDER,
-            "ADAPTATION_MODEL":    cfg.ADAPTATION_MODEL,
             "OPENROUTER_API_KEY":  cfg.OPENROUTER_API_KEY,
             "OPENROUTER_MODEL":    cfg.OPENROUTER_MODEL,
         })

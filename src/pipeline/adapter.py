@@ -1,7 +1,7 @@
 """Audiobook text adaptation — rewrites chapter prose for audio listening.
 
 Providers:
-  ollama      — local Ollama server (uses OLLAMA_URL + ADAPTATION_MODEL)
+  ollama      — local Ollama server (uses OLLAMA_URL + LLM_MODEL)
   openrouter  — cloud API via https://openrouter.ai/api/v1 (OpenAI-compatible)
 
 The adapter takes raw TTS chunks joined as prose and returns adapted text

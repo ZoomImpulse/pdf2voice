@@ -106,6 +106,12 @@ class _StageRow(QFrame):
         self._bar.setVisible(False)
         self._detail_lbl.setVisible(False)
 
+    def set_cancelled(self) -> None:
+        self._set_icon("stage-icon-error")
+        self._set_state("stage-state-error", "Cancelled")
+        self._bar.setVisible(False)
+        self._detail_lbl.setVisible(False)
+
     def set_pending(self) -> None:
         self._set_icon("stage-icon-pending")
         self._set_state("stage-state-pending", "")
@@ -238,6 +244,13 @@ class PipelineSection(QFrame):
         if row := self._stages.get(stage):
             row.set_error()
         self._overall_lbl.setText("Error in " + _STAGE_NAMES.get(stage, f"stage {stage}"))
+
+    def mark_cancelled(self) -> None:
+        """Mark the currently-active stage as cancelled and update the overall label."""
+        if row := self._stages.get(self._current_stage):
+            row.set_cancelled()
+        self._overall_lbl.setText("Cancelled")
+        self._current_stage = -1
 
     def set_status(self, text: str) -> None:
         self._overall_lbl.setText(text)

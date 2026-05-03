@@ -16,7 +16,7 @@ from src.config import (
     TTS_VOICE_INSTRUCT,
 )
 from src.pipeline.structurer import StructuredBook
-from src.pipeline.session import BookSession
+from src.pipeline.session import BookSession, chunk_temp_path
 
 ChunkCallback = Callable[[int, int, int, int], None]
 
@@ -132,7 +132,7 @@ def generate_audiobook(
             wavs, sr = tts.generate_voice_clone(
                 text=title_text,
                 voice_clone_prompt=voice_prompt,
-                language=book.language,
+                language=_resolve_language(book.language),
             )
             chunk_wavs.append((wavs[0], sr))
             chunk_pauses_out.append(_SILENCE_TITLE_S)
@@ -151,7 +151,7 @@ def generate_audiobook(
                 wavs, sr = tts.generate_voice_clone(
                     text=chunk_text,
                     voice_clone_prompt=voice_prompt,
-                    language=book.language,
+                    language=_resolve_language(book.language),
                 )
                 chunk_wavs.append((wavs[0], sr))
                 pause = (
@@ -200,6 +200,31 @@ def generate_audiobook(
 
 # ── Phase 1 helpers ───────────────────────────────────────────────────────────
 
+_LANG_CODE_TO_NAME: dict[str, str] = {
+    "zh": "chinese",
+    "en": "english",
+    "fr": "french",
+    "de": "german",
+    "it": "italian",
+    "ja": "japanese",
+    "ko": "korean",
+    "pt": "portuguese",
+    "ru": "russian",
+    "es": "spanish",
+}
+
+
+def _resolve_language(lang: str) -> str:
+    """Normalise an ISO code or full name to the form the TTS model expects."""
+    lower = lang.lower().strip()
+    # Already a full name recognised by the model
+    if lower in _LANG_CODE_TO_NAME.values() or lower == "auto":
+        return lower
+    # ISO-639-1 code (possibly with region tag like "en-US")
+    code = lower.split("-")[0].split("_")[0]
+    return _LANG_CODE_TO_NAME.get(code, "auto")
+
+
 def _generate_anchor(
     voice_instruct: str,
     language: str,
@@ -212,6 +237,7 @@ def _generate_anchor(
     from qwen_tts import Qwen3TTSModel
 
     anchor_text = _ANCHOR_TEXTS.get(language.lower(), _ANCHOR_TEXT_DEFAULT)
+    language = _resolve_language(language)
 
     if log_cb:
         log_cb(f"Voice Anchor: Loading model {TTS_DESIGN_MODEL} …")

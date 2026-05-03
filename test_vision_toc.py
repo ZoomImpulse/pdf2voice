@@ -36,20 +36,8 @@ def test_vision_toc(pdf_path: str):
     print()
     
     # Test vision TOC
-    print("2️⃣  Testing vision-based TOC extraction…")
-    print("   (Rendering pages and sending to llava:7b)\n")
-
-    # Quick sanity check: is Ollama reachable?
-    try:
-        import ollama
-        models = ollama.list()
-        model_names = [m.get("name", "") if isinstance(m, dict) else str(m) for m in models.get("models", [])]
-        clean_names = [m.split("'")[1] if "model=" in m else m for m in model_names]
-        print(f"   📦 Ollama models: {clean_names}")
-    except Exception as e:
-        print(f"   ❌ Ollama not reachable: {e}")
-        print("   Make sure Ollama is running: ollama serve")
-        return
+    print("2️⃣  Testing text-based TOC extraction via LLM …")
+    print("   (Extracts text from TOC pages and parses with OpenRouter LLM)\n")
 
     # Save rendered images so we can verify what the model sees
     import fitz, base64

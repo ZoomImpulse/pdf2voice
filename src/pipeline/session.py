@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SESSION_VERSION = 3
+SESSION_VERSION = 4
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -25,6 +25,7 @@ class ChapterState:
     adapted_text: str | None = None   # LLM-adapted prose stored alongside original
     done: bool = False
     output: str | None = None  # absolute path to the chapter .wav file
+    completed_chunks: int = 0  # content chunks written to temp files (for chunk-level resume)
 
 
 @dataclass
@@ -75,7 +76,13 @@ class BookSession:
         ch = self.chapter_state(index)
         if ch:
             ch.done = True
+            ch.completed_chunks = 0
             ch.output = str(output_path)
+
+    def mark_chunk_done(self, chapter_index: int, chunk_count: int) -> None:
+        ch = self.chapter_state(chapter_index)
+        if ch:
+            ch.completed_chunks = chunk_count
 
     def update_chapter_text(
         self, index: int, chunks: list[str], pauses: list[float]
@@ -106,7 +113,7 @@ class BookSession:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             version = data.get("version")
-            if version not in (1, 2, 3):
+            if version not in (1, 2, 3, SESSION_VERSION):
                 return None
             raw_chapters = data.pop("chapters", [])
             chapters: list[ChapterState] = []
@@ -117,6 +124,9 @@ class BookSession:
                 # v2 migration: add adapted_text field
                 if "adapted_text" not in ch:
                     ch["adapted_text"] = None
+                # v4 migration: add completed_chunks field
+                if "completed_chunks" not in ch:
+                    ch["completed_chunks"] = 0
                 chapters.append(ChapterState(**ch))
             data["chapters"] = chapters
             data["version"] = SESSION_VERSION
@@ -188,6 +198,24 @@ def book_from_session(session: BookSession):
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 
+def chunk_temp_path(pdf_hash: str, chapter_index: int, chunk_idx: int) -> Path:
+    """Return the temp .wav path for a single content chunk."""
+    from src.config import OUTPUT_DIR
+    return OUTPUT_DIR / f".tmp_{pdf_hash}_ch{chapter_index:02d}_{chunk_idx:04d}.wav"
+
+
 def _session_path(pdf_hash_str: str) -> Path:
     from src.config import OUTPUT_DIR
     return OUTPUT_DIR / f".session_{pdf_hash_str}.json"
+
+
+def list_incomplete() -> list[BookSession]:
+    """Return all saved sessions that are not yet fully complete."""
+    from src.config import OUTPUT_DIR
+    sessions: list[BookSession] = []
+    for path in sorted(OUTPUT_DIR.glob(".session_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        pdf_hash = path.stem[len(".session_"):]
+        session = BookSession.load(pdf_hash)
+        if session is not None and not session.is_complete:
+            sessions.append(session)
+    return sessions

@@ -7,7 +7,7 @@ from typing import Callable
 
 import ollama
 
-from src.config import GENRE_PROMPTS, LLM_MODEL, TTS_VOICE_INSTRUCT
+from src.config import GENRE_PROMPTS, LLM_MODEL, OLLAMA_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, TTS_VOICE_INSTRUCT
 from src.pipeline.extractor import extract_toc as _extract_toc, extract_toc_from_pages as _extract_toc_vision
 from src.pipeline.preprocessor import preprocess as _preprocess
 
@@ -79,6 +79,9 @@ def structure_content(
     progress_cb: Callable[[int], None] | None = None,
     model: str = LLM_MODEL,
     pdf_path: str | None = None,
+    provider: str = "ollama",
+    api_key: str = "",
+    ollama_base_url: str = OLLAMA_URL,
 ) -> StructuredBook:
     """Structure markdown content for TTS generation.
 
@@ -102,10 +105,10 @@ def structure_content(
             if toc:
                 log_cb(f"Preprocessing: PDF table of contents found ({len(toc)} entries) — using for chapter boundaries")
             else:
-                log_cb("Preprocessing: No embedded TOC found — trying vision extraction …")
+                log_cb("Preprocessing: No embedded TOC found — trying text TOC extraction via LLM …")
                 toc = _extract_toc_vision(pdf_path, log_cb=log_cb)
                 if not toc and log_cb:
-                    log_cb("Preprocessing: Vision extraction found no TOC — falling back to heading detection")
+                    log_cb("Preprocessing: Text TOC extraction found no entries — falling back to heading detection")
 
     pre = _preprocess(markdown, toc=toc or None, log_cb=log_cb)
 
@@ -138,12 +141,15 @@ def structure_content(
     subdivision_type = pre.subdivision_type  # pattern-detected — overridden by LLM if needed
 
     if log_cb:
-        log_cb(f"LLM: Detecting metadata ({len(pre.sample):,} chars) …")
+        log_cb(f"LLM: Detecting metadata via {model} ({len(pre.sample):,} chars) …")
 
     meta = _call_llm_for_metadata(
         pre.sample, model, log_cb, check_pause, progress_cb,
         structure_suspect=pre.structure_suspect,
         chapters=chapters,
+        provider=provider,
+        api_key=api_key,
+        ollama_base_url=ollama_base_url,
     )
     if meta:
         title            = meta.get("title", title) or title
@@ -204,6 +210,9 @@ def _call_llm_for_metadata(
     progress_cb: Callable[[int], None] | None = None,
     structure_suspect: bool = False,
     chapters: list | None = None,
+    provider: str = "ollama",
+    api_key: str = "",
+    ollama_base_url: str = OLLAMA_URL,
 ) -> dict | None:
     """Send a short sample to the LLM and return metadata dict.
 
@@ -226,10 +235,28 @@ def _call_llm_for_metadata(
         if log_cb:
             if structure_suspect:
                 log_cb("LLM: Structure check active (too many/thin chapters detected) …")
-            log_cb("LLM: Waiting for model response …")
+            log_cb(f"LLM: Waiting for {model} response …")
         # Use a larger context window when the title list is included
         ctx_size = 8192 if structure_suspect else 4096
-        stream = ollama.chat(
+
+        if provider == "openrouter":
+            from src.pipeline.adapter import _call_openrouter as _or_call
+            try:
+                raw = _or_call(sample, model, api_key)
+                if log_cb:
+                    log_cb(f"LLM: Metadata received")
+                raw = _strip_code_fences(raw.strip())
+                return json.loads(raw)
+            except (json.JSONDecodeError, KeyError) as e:
+                if log_cb:
+                    log_cb(f"LLM: Metadata parse failed ({e}) \u2014 using defaults")
+                return None
+            except Exception as e:
+                if log_cb:
+                    log_cb(f"LLM: Metadata detection failed ({e}) \u2014 using defaults")
+                return None
+
+        stream = ollama.Client(host=ollama_base_url).chat(
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -250,6 +277,8 @@ def _call_llm_for_metadata(
         token_count = 0
         last_logged = 0
         for chunk in stream:
+            if check_pause:
+                check_pause()
             token = chunk["message"]["content"]
             parts.append(token)
             token_count += 1

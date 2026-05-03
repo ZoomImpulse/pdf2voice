@@ -140,12 +140,91 @@ class PipelineWorker(QThread):
                 f'Resuming "{session.title}" — {done}/{total} chapters already done.'
             )
             self.stage_done.emit(0)
-            self.stage_done.emit(1)
             self.book_ready.emit(book)
             self.chapters_ready.emit([(ch.index, ch.title) for ch in book.chapters])
             for ch in session.chapters:
                 if ch.done:
                     self.chapter_done.emit(ch.index)
+
+            # ── Re-run adaptation for any chapters not yet adapted ─────
+            from src.config import (
+                ADAPTATION_ENABLED, ADAPTATION_PROVIDER,
+                OPENROUTER_API_KEY, OPENROUTER_MODEL, OLLAMA_URL,
+            )
+            if ADAPTATION_ENABLED:
+                pending = [ch for ch in book.chapters if ch.adapted_text is None]
+                if pending:
+                    self._current_stage = 1
+                    self.stage_running.emit(1)
+                    from src.pipeline.adapter import adapt_chapter
+                    from src.pipeline.preprocessor import (
+                        chunk_text, SILENCE_PARA_S, SILENCE_CHUNK_S,
+                    )
+                    import re as _re
+                    adapt_model = (
+                        OPENROUTER_MODEL if ADAPTATION_PROVIDER == "openrouter"
+                        else LLM_MODEL
+                    )
+                    provider_label = ADAPTATION_PROVIDER.capitalize()
+                    self.log_info.emit(
+                        f"Resuming adaptation — {len(pending)} chapter(s) remaining "
+                        f"via {provider_label} ({adapt_model}) …"
+                    )
+                    for chapter in pending:
+                        self._check_cancel()
+                        while self._paused and not self._cancelled:
+                            self.msleep(150)
+                        self._check_cancel()
+                        self.stage_status.emit(
+                            f"Adapting {chapter.index}/{len(book.chapters)}: "
+                            f"{chapter.title[:40]} …"
+                        )
+                        self.log_info.emit(
+                            f"  Adapting chapter {chapter.index}: {chapter.title}"
+                        )
+                        try:
+                            adapted = adapt_chapter(
+                                title=chapter.title,
+                                chunks=chapter.chunks,
+                                provider=ADAPTATION_PROVIDER,
+                                model=adapt_model,
+                                api_key=OPENROUTER_API_KEY,
+                                ollama_base_url=OLLAMA_URL,
+                                log_cb=lambda msg: self.log_info.emit(msg),
+                            )
+                            new_chunks: list[str] = []
+                            new_pauses: list[float] = []
+                            for para in _re.split(r"\n{2,}", adapted):
+                                para = para.strip()
+                                if not para:
+                                    continue
+                                para_chunks = chunk_text(para)
+                                for i, c in enumerate(para_chunks):
+                                    new_chunks.append(c)
+                                    new_pauses.append(
+                                        SILENCE_PARA_S if i == len(para_chunks) - 1
+                                        else SILENCE_CHUNK_S
+                                    )
+                            if new_chunks:
+                                chapter.adapted_text = adapted
+                                chapter.chunks = new_chunks
+                                chapter.chunk_pauses = new_pauses
+                                ch_state = session.chapter_state(chapter.index)
+                                if ch_state:
+                                    ch_state.adapted_text = adapted
+                                    ch_state.chunks = new_chunks
+                                    ch_state.chunk_pauses = new_pauses
+                                self.chapter_adapted.emit(chapter.index, chapter.title)
+                        except Exception as exc:
+                            self.log_warn.emit(
+                                f"  Adaptation failed for '{chapter.title}': {exc}"
+                                " — using original text"
+                            )
+                            self.chapter_adapted.emit(chapter.index, chapter.title)
+                        session.save()
+                    self.log_success.emit("Audiobook adaptation complete.")
+
+            self.stage_done.emit(1)
             self.log_info.emit(
                 "Review the chapter list and preview, then click "
                 "Confirm & Generate to continue."
@@ -166,6 +245,10 @@ class PipelineWorker(QThread):
             self.log_info.emit(f"Found: {total_pages} pages")
 
             def _extract_cb(cur: int, tot: int) -> None:
+                while self._paused and not self._cancelled:
+                    self.msleep(150)
+                if self._cancelled:
+                    raise _Cancelled
                 self.stage_progress.emit(0, cur, tot)
 
             markdown = extract_pdf(pdf_path, _extract_cb)
@@ -176,15 +259,21 @@ class PipelineWorker(QThread):
             # Stage 1: LLM Structuring
             self._current_stage = 1
             self.stage_running.emit(1)
-            self.log_info.emit(f"AI structuring content via {LLM_MODEL} …")
+
+            from src.config import (
+                ADAPTATION_ENABLED, ADAPTATION_PROVIDER,
+                OPENROUTER_API_KEY, OPENROUTER_MODEL, OLLAMA_URL,
+            )
+
+            struct_model = (
+                OPENROUTER_MODEL if ADAPTATION_PROVIDER == "openrouter"
+                else LLM_MODEL
+            )
+            provider_label = ADAPTATION_PROVIDER.capitalize()
+            self.log_info.emit(f"AI structuring content via {provider_label} ({struct_model}) …")
 
             def _llm_log(msg: str) -> None:
                 self.log_info.emit(msg)
-
-            from src.config import (
-                ADAPTATION_ENABLED, ADAPTATION_PROVIDER, ADAPTATION_MODEL,
-                OPENROUTER_API_KEY, OPENROUTER_MODEL, OLLAMA_URL,
-            )
 
             def _chapters_streaming(chapters: list) -> None:
                 """Called when new chapters become available during structuring."""
@@ -212,6 +301,10 @@ class PipelineWorker(QThread):
                 check_pause=_check_structure_pause,
                 progress_cb=_llm_progress,
                 pdf_path=pdf_path,
+                model=struct_model,
+                provider=ADAPTATION_PROVIDER,
+                api_key=OPENROUTER_API_KEY,
+                ollama_base_url=OLLAMA_URL,
             )
             self.log_success.emit(
                 f'Structured: "{book.title}" — '
@@ -238,13 +331,18 @@ class PipelineWorker(QThread):
             if ADAPTATION_ENABLED:
                 adapt_model = (
                     OPENROUTER_MODEL if ADAPTATION_PROVIDER == "openrouter"
-                    else ADAPTATION_MODEL
+                    else LLM_MODEL
                 )
+                provider_label = ADAPTATION_PROVIDER.capitalize()
                 self.log_info.emit(
                     f"Adapting {len(book.chapters)} chapter(s) for audio "
-                    f"via {ADAPTATION_PROVIDER} / {adapt_model} …"
+                    f"via {provider_label} ({adapt_model}) …"
                 )
                 for chapter in book.chapters:
+                    self._check_cancel()
+                    # Honour pause between adaptation calls
+                    while self._paused and not self._cancelled:
+                        self.msleep(150)
                     self._check_cancel()
                     self.stage_status.emit(
                         f"Adapting {chapter.index}/{len(book.chapters)}: "
@@ -319,6 +417,10 @@ class PipelineWorker(QThread):
 
         def _anchor_cb(pct: float) -> None:
             nonlocal _anchor_stage_done
+            while self._paused and not self._cancelled:
+                self.msleep(150)
+            if self._cancelled:
+                raise _Cancelled
             self.stage_progress.emit(2, int(pct), 100)
             if pct >= 100.0 and not _anchor_stage_done:
                 _anchor_stage_done = True
@@ -330,6 +432,10 @@ class PipelineWorker(QThread):
             self.log_info.emit(msg)
 
         def _content_cb(ch_idx: int, g_chunk: int, tot_ch: int, tot_chunks: int) -> None:
+            while self._paused and not self._cancelled:
+                self.msleep(150)
+            if self._cancelled:
+                raise _Cancelled
             pct = int((g_chunk / max(tot_chunks, 1)) * 100)
             self.stage_progress.emit(3, pct, 100)
             self.chapter_running.emit(ch_idx + 1)
@@ -510,5 +616,10 @@ class RegenerationWorker(QThread):
         self.regen_done.emit(self._chapter_index, final_path)
 
 
-class _Cancelled(Exception):
-    """Internal sentinel raised when the pipeline is cancelled."""
+class _Cancelled(BaseException):
+    """Internal sentinel raised when the pipeline is cancelled.
+
+    Inherits from BaseException (not Exception) so that it propagates
+    through third-party ``except Exception`` handlers (e.g. inside the
+    extractor / TTS engine) without being accidentally swallowed.
+    """

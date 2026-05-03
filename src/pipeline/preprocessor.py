@@ -163,6 +163,17 @@ def preprocess(
             for i, chunk in enumerate(para_chunks):
                 chunks.append(chunk)
                 pauses.append(_SILENCE_PARA_S if i == len(para_chunks) - 1 else _SILENCE_CHUNK_S)
+        # Strip leading title-echo: chapter heading repeated in body text
+        # e.g. "Chapter 10: Substantial Healing of..." as the first chunk
+        if chunks and ch_title:
+            first = chunks[0]
+            candidate = re.sub(
+                r'^(?:chapter|part|section|kapitel|teil|abschnitt)\s+\d+\s*[:.–\-]?\s*',
+                '', first, flags=re.IGNORECASE,
+            ).strip()
+            if _toc_similarity(candidate, ch_title) >= 0.75 or _toc_similarity(first, ch_title) >= 0.75:
+                chunks = chunks[1:]
+                pauses = pauses[1:]
         if chunks:
             chapters.append(RawChapter(title=ch_title, chunks=chunks, chunk_pauses=pauses))
 
@@ -426,7 +437,14 @@ def _split_by_toc(
     name, or None when hit rate is below _TOC_RELIABLE_RATIO.
     """
     lines = markdown.splitlines()
-    toc_entries = [(title.strip(), page) for _, title, page in toc if title.strip()]
+    # Filter out section-divider entries (e.g. "Section I", "Part II") that carry
+    # page=0 — they group real chapters but have no content page of their own.
+    # Only apply the filter when at least some entries DO have a real page number;
+    # if every entry has page=0 the extractor couldn't parse numbers at all and we
+    # keep everything so the titles are still usable for splitting.
+    _raw = [(title.strip(), page) for _, title, page in toc if title.strip()]
+    _has_paged = any(page > 0 for _, page in _raw)
+    toc_entries = [(title, page) for title, page in _raw if page > 0 or not _has_paged]
     if not toc_entries:
         return None
 

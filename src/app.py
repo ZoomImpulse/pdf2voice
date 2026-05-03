@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -64,6 +64,11 @@ class Pdf2VoiceApp(QMainWindow):
         self._chapter_section.chapter_edit_saved.connect(self._on_chapter_edit_saved)
         self._chapter_section.chapter_regen_requested.connect(self._on_chapter_regen_requested)
         self._chapter_section.chapter_selected.connect(self._on_chapter_selected)
+        self._info_bar.pdf_selected.connect(self._on_pdf_selected)
+
+        # Check for incomplete sessions after the window is shown
+        if not self._initial_path:
+            QTimer.singleShot(200, self._check_startup_sessions)
 
     # ── Header ────────────────────────────────────────────────────────────────
 
@@ -84,7 +89,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._open_output_btn.clicked.connect(self._open_output)
         layout.addWidget(self._open_output_btn)
 
-        self._settings_btn = QPushButton("⚙  Settings")
+        self._settings_btn = QPushButton("⚙️  Settings")
         self._settings_btn.setObjectName("header-btn")
         self._settings_btn.clicked.connect(self._open_settings)
         layout.addWidget(self._settings_btn)
@@ -167,9 +172,9 @@ class Pdf2VoiceApp(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(8)
 
-        self._start_btn  = QPushButton("▶  Start")
-        self._pause_btn  = QPushButton("⏸  Pause")
-        self._cancel_btn = QPushButton("✕  Cancel")
+        self._start_btn  = QPushButton("Start")
+        self._pause_btn  = QPushButton("Pause")
+        self._cancel_btn = QPushButton("Cancel")
 
         self._start_btn.setObjectName("btn-start")
         self._pause_btn.setObjectName("btn-pause")
@@ -359,19 +364,134 @@ class Pdf2VoiceApp(QMainWindow):
 
     # ── Pipeline control ──────────────────────────────────────────────────────
 
-    def _start_pipeline(self) -> None:
-        pdf_path = self._info_bar.get_pdf_path()
-        if not pdf_path:
-            self._log_panel.error("Please select a PDF file first.")
+    def _check_startup_sessions(self) -> None:
+        """On startup, find incomplete sessions and offer to resume one."""
+        try:
+            from src.pipeline.session import list_incomplete
+            sessions = list_incomplete()
+        except Exception:
             return
-        if not Path(pdf_path).is_file():
-            self._log_panel.error(f"File not found: {pdf_path}")
+        if not sessions:
             return
 
-        force_fresh  = False
-        force_resume = False
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout as _QHBox, QListWidget, QListWidgetItem
 
-        # Check for an existing incomplete session before spawning the worker
+        # Mutable list so the delete button can update it in-place
+        session_list: list = list(sessions)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Resume Previous Session?")
+        dlg.setMinimumWidth(500)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        lbl = QLabel(
+            f"<b>{len(session_list)} incomplete session{'s' if len(session_list) > 1 else ''} found.</b>"
+            "<br>Select one to resume, or close this dialog to start fresh."
+        )
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        list_widget = QListWidget()
+
+        def _populate() -> None:
+            list_widget.clear()
+            for s in session_list:
+                done     = s.completed_count
+                total    = len(s.chapters)
+                pdf_name = Path(s.pdf_path).name if s.pdf_path else "unknown"
+                item = QListWidgetItem(
+                    f"{s.title or pdf_name}  —  {done}/{total} chapters  ({s.gender})"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, s)
+                list_widget.addItem(item)
+            if list_widget.count():
+                list_widget.setCurrentRow(0)
+            lbl.setText(
+                f"<b>{len(session_list)} incomplete session{'s' if len(session_list) > 1 else ''} found.</b>"
+                "<br>Select one to resume, or close this dialog to start fresh."
+            )
+
+        _populate()
+        layout.addWidget(list_widget)
+
+        # ── Button row ────────────────────────────────────────────────
+        btn_row = _QHBox()
+        btn_row.setSpacing(8)
+
+        delete_btn = QPushButton("🗑  Delete Selected")
+        delete_btn.setObjectName("btn-delete-session")
+
+        def _delete_selected() -> None:
+            item = list_widget.currentItem()
+            if not item:
+                return
+            s = item.data(Qt.ItemDataRole.UserRole)
+            if not s:
+                return
+            confirm = QMessageBox.question(
+                dlg, "Delete Session",
+                f"Delete the session for <b>{s.title or 'this book'}</b>?<br>"
+                "Already-generated audio files will not be removed.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                s.delete()
+            except Exception:
+                pass
+            session_list.remove(s)
+            _populate()
+            if not session_list:
+                dlg.reject()
+
+        delete_btn.clicked.connect(_delete_selected)
+        btn_row.addWidget(delete_btn)
+        btn_row.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Resume Selected")
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        btn_row.addWidget(btn_box)
+        layout.addLayout(btn_row)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected = list_widget.currentItem()
+        if not selected:
+            return
+        session = selected.data(Qt.ItemDataRole.UserRole)
+        if not session:
+            return
+
+        pdf_path = session.pdf_path
+        if not pdf_path or not Path(pdf_path).is_file():
+            QMessageBox.warning(
+                self, "File Not Found",
+                f"The original PDF could not be found:\n{pdf_path}\n\nPlease use Browse to locate it."
+            )
+            return
+
+        self._force_fresh  = False
+        self._force_resume = True
+        self._info_bar.set_pdf_path(pdf_path)
+        self._info_bar.set_gender(session.gender)
+
+    def _on_pdf_selected(self, pdf_path: str) -> None:
+        """Called immediately when the user picks a PDF via Browse.
+
+        Checks for an existing incomplete session and prompts the user to
+        resume or start fresh.  The choice is stored so _start_pipeline can
+        use it without asking again.
+        """
+        self._force_fresh  = False
+        self._force_resume = False
         try:
             from src.pipeline.session import BookSession, compute_pdf_hash
             pdf_hash = compute_pdf_hash(pdf_path)
@@ -398,13 +518,28 @@ class Pdf2VoiceApp(QMainWindow):
                 dlg.exec()
                 clicked = dlg.clickedButton()
                 if clicked is btn_resume:
-                    force_resume = True
+                    self._force_resume = True
+                    self._info_bar.set_gender(existing.gender)
                 elif clicked is btn_fresh:
-                    force_fresh = True
-                else:
-                    return   # user cancelled
+                    self._force_fresh = True
+                # Cancel: no flags set, user can still pick another file or start later
         except Exception:
-            pass  # session check is best-effort; proceed normally if it fails
+            pass  # session check is best-effort
+
+    def _start_pipeline(self) -> None:
+        pdf_path = self._info_bar.get_pdf_path()
+        if not pdf_path:
+            self._log_panel.error("Please select a PDF file first.")
+            return
+        if not Path(pdf_path).is_file():
+            self._log_panel.error(f"File not found: {pdf_path}")
+            return
+        if not self._info_bar.get_gender():
+            self._log_panel.error("Please select a narrator voice (Female or Male) first.")
+            return
+
+        force_fresh  = getattr(self, "_force_fresh",  False)
+        force_resume = getattr(self, "_force_resume", False)
 
         self._book    = None
         self._session = None
@@ -523,6 +658,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._confirm_bar.setVisible(False)
         if self._worker:
             self._worker.cancel()
+        self._pipeline_panel.mark_cancelled()
         self._log_panel.error("Pipeline cancelled.")
         self._app_state = "idle"
         self._set_controls("idle")
