@@ -1,36 +1,33 @@
-"""pdf2voice — Main PyQt6 application window."""
+"""pdf2voice — Main PyQt6 application window (Concept 3: vertical card layout)."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import (
-    QButtonGroup,
-    QFileDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QRadioButton,
-    QSplitter,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from src.config import LLM_MODEL, OUTPUT_DIR, TTS_BASE_MODEL, TTS_DESIGN_MODEL, TTS_GENDER
+from src.config import OUTPUT_DIR
 from src.styles import DARK_STYLESHEET
-from src.widgets.chapter_list import ChapterListPanel
+from src.widgets.chapter_section import ChapterSection
+from src.widgets.info_bar import InfoBar
 from src.widgets.log_panel import LogPanel
-from src.widgets.pipeline_panel import PipelinePanel
-from src.widgets.preview_panel import PreviewPanel
-from src.workers import PipelineWorker
+from src.widgets.pipeline_section import PipelineSection
+from src.widgets.settings_dialog import SettingsDialog
+from src.workers import PipelineWorker, RegenerationWorker
 
 
 class Pdf2VoiceApp(QMainWindow):
@@ -38,16 +35,19 @@ class Pdf2VoiceApp(QMainWindow):
         super().__init__()
         self._initial_path = pdf_path or ""
         self._worker: PipelineWorker | None = None
+        self._regen_worker: RegenerationWorker | None = None
         self._book = None
+        self._session = None
+        self._app_state = "idle"   # "idle"|"running"|"awaiting"|"complete"|"regenerating"
 
-        self.setWindowTitle("pdf2voice — PDF \u2192 Audiobook")
-        self.resize(1400, 860)
-        self.setMinimumSize(900, 600)
+        self.setWindowTitle("pdf2voice — PDF → Audiobook")
+        self.resize(1000, 860)
+        self.setMinimumSize(700, 500)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self._build_ui()
 
-    # \u2500\u2500 UI construction \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -57,21 +57,15 @@ class Pdf2VoiceApp(QMainWindow):
         root_layout.setSpacing(0)
 
         root_layout.addWidget(self._make_header())
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._make_left_panel())
-        splitter.addWidget(self._make_center_panel())
-        splitter.addWidget(self._make_right_panel())
-        splitter.setSizes([280, 720, 320])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        root_layout.addWidget(splitter, stretch=1)
-
+        root_layout.addWidget(self._make_scroll_body(), stretch=1)
         root_layout.addWidget(self._make_footer())
 
-    # \u2500\u2500 Header \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        # Wire persistent signals
+        self._chapter_section.chapter_edit_saved.connect(self._on_chapter_edit_saved)
+        self._chapter_section.chapter_regen_requested.connect(self._on_chapter_regen_requested)
+        self._chapter_section.chapter_selected.connect(self._on_chapter_selected)
+
+    # ── Header ────────────────────────────────────────────────────────────────
 
     def _make_header(self) -> QFrame:
         frame = QFrame()
@@ -80,113 +74,62 @@ class Pdf2VoiceApp(QMainWindow):
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("\U0001f3b5  pdf2voice")
+        title = QLabel("🎵  pdf2voice")
         title.setObjectName("app-title")
         layout.addWidget(title)
         layout.addStretch()
 
-        self._open_output_btn = QPushButton("\U0001f4c2  Open Output")
+        self._open_output_btn = QPushButton("📂  Open Output")
         self._open_output_btn.setObjectName("header-btn")
         self._open_output_btn.clicked.connect(self._open_output)
         layout.addWidget(self._open_output_btn)
 
-        return frame
-
-    # \u2500\u2500 Left panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-    def _make_left_panel(self) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("left-panel")
-        frame.setFixedWidth(280)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-
-        # PDF Input
-        input_box = QGroupBox("PDF File")
-        il = QVBoxLayout(input_box)
-        il.setSpacing(6)
-
-        self._path_edit = QLineEdit(self._initial_path)
-        self._path_edit.setObjectName("path-edit")
-        self._path_edit.setPlaceholderText("Path to PDF file \u2026")
-        il.addWidget(self._path_edit)
-
-        self._browse_btn = QPushButton("Browse \u2026")
-        self._browse_btn.setObjectName("browse-btn")
-        self._browse_btn.clicked.connect(self._browse_pdf)
-        il.addWidget(self._browse_btn)
-
-        layout.addWidget(input_box)
-
-        # Voice selector
-        voice_box = QGroupBox("Voice")
-        vl = QVBoxLayout(voice_box)
-        vl.setSpacing(4)
-
-        self._btn_female = QRadioButton("\u2640  Female")
-        self._btn_male   = QRadioButton("\u2642  Male")
-        self._gender_grp = QButtonGroup(self)
-        self._gender_grp.addButton(self._btn_female)
-        self._gender_grp.addButton(self._btn_male)
-        (self._btn_female if TTS_GENDER == "female" else self._btn_male).setChecked(True)
-        vl.addWidget(self._btn_female)
-        vl.addWidget(self._btn_male)
-
-        layout.addWidget(voice_box)
-
-        # Settings display
-        settings_box = QGroupBox("Settings")
-        sl = QVBoxLayout(settings_box)
-        sl.setSpacing(4)
-
-        design_short = TTS_DESIGN_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
-        base_short   = TTS_BASE_MODEL.split("/")[-1].replace("Qwen3-TTS-12Hz-", "")
-        for key, val in [
-            ("LLM",    LLM_MODEL),
-            ("Anchor", design_short),
-            ("Base",   base_short),
-            ("Output", str(OUTPUT_DIR)),
-        ]:
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            k = QLabel(key + ":")
-            k.setObjectName("settings-key")
-            k.setFixedWidth(52)
-            v = QLabel(val)
-            v.setObjectName("settings-val")
-            v.setWordWrap(True)
-            row.addWidget(k)
-            row.addWidget(v, stretch=1)
-            sl.addLayout(row)
-
-        layout.addWidget(settings_box)
-        layout.addStretch()
+        self._settings_btn = QPushButton("⚙  Settings")
+        self._settings_btn.setObjectName("header-btn")
+        self._settings_btn.clicked.connect(self._open_settings)
+        layout.addWidget(self._settings_btn)
 
         return frame
 
-    # \u2500\u2500 Center panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── Scrollable body ───────────────────────────────────────────────────────
 
-    def _make_center_panel(self) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("center-panel")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(8, 12, 8, 12)
-        layout.setSpacing(10)
+    def _make_scroll_body(self) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        self._pipeline_panel = PipelinePanel()
+        body = QWidget()
+        body.setObjectName("scroll-body")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # ── Info cards row ────────────────────────────────────────────
+        self._info_bar = InfoBar(self._initial_path)
+        layout.addWidget(self._info_bar)
+
+        # ── Pipeline section ──────────────────────────────────────────
+        self._pipeline_panel = PipelineSection()
         layout.addWidget(self._pipeline_panel)
 
-        # Inline confirmation banner — hidden until AI structuring finishes
+        # ── Confirmation banner (hidden until structuring finishes) ───
         self._confirm_bar = self._make_confirm_bar()
         self._confirm_bar.setVisible(False)
         layout.addWidget(self._confirm_bar)
 
-        self._chapter_list = ChapterListPanel()
-        self._chapter_list.chapter_selected.connect(self._on_chapter_selected)
-        layout.addWidget(self._chapter_list, stretch=1)
+        # ── Chapter review section ────────────────────────────────────
+        self._chapter_section = ChapterSection()
+        layout.addWidget(self._chapter_section)
 
-        return frame
+        # ── Activity log ──────────────────────────────────────────────
+        self._log_panel = LogPanel()
+        self._log_panel.setMinimumHeight(180)
+        layout.addWidget(self._log_panel)
+
+        layout.addStretch()
+        scroll.setWidget(body)
+        return scroll
 
     def _make_confirm_bar(self) -> QFrame:
         bar = QFrame()
@@ -214,22 +157,7 @@ class Pdf2VoiceApp(QMainWindow):
 
         return bar
 
-    # \u2500\u2500 Right panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-
-    def _make_right_panel(self) -> QSplitter:
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setChildrenCollapsible(False)
-
-        self._preview_panel = PreviewPanel()
-        splitter.addWidget(self._preview_panel)
-
-        self._log_panel = LogPanel()
-        splitter.addWidget(self._log_panel)
-
-        splitter.setSizes([420, 280])
-        return splitter
-
-    # \u2500\u2500 Footer \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── Footer ────────────────────────────────────────────────────────────────
 
     def _make_footer(self) -> QFrame:
         frame = QFrame()
@@ -239,9 +167,9 @@ class Pdf2VoiceApp(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(8)
 
-        self._start_btn  = QPushButton("\u25b6  Start")
-        self._pause_btn  = QPushButton("\u23f8  Pause")
-        self._cancel_btn = QPushButton("\u2715  Cancel")
+        self._start_btn  = QPushButton("▶  Start")
+        self._pause_btn  = QPushButton("⏸  Pause")
+        self._cancel_btn = QPushButton("✕  Cancel")
 
         self._start_btn.setObjectName("btn-start")
         self._pause_btn.setObjectName("btn-pause")
@@ -266,14 +194,8 @@ class Pdf2VoiceApp(QMainWindow):
 
         return frame
 
-    # \u2500\u2500 Actions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── Actions ───────────────────────────────────────────────────────────────
 
-    def _browse_pdf(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select PDF", "", "PDF files (*.pdf);;All files (*.*)"
-        )
-        if path:
-            self._path_edit.setText(path)
 
     def _open_output(self) -> None:
         path = str(OUTPUT_DIR.resolve())
@@ -283,6 +205,10 @@ class Pdf2VoiceApp(QMainWindow):
             subprocess.Popen(["open", path])
         else:
             subprocess.Popen(["xdg-open", path])
+
+    def _open_settings(self) -> None:
+        dlg = SettingsDialog(self)
+        dlg.exec()
 
     @pyqtSlot(int, str)
     def _on_chapter_selected(self, index: int, title: str) -> None:
@@ -297,7 +223,7 @@ class Pdf2VoiceApp(QMainWindow):
         announcement = _chapter_title_text(
             chapter.index, chapter.title, self._book.subdivision_type
         )
-        self._preview_panel.show_chapter(
+        self._chapter_section.show_chapter(
             index=chapter.index,
             title=chapter.title,
             chunks=chapter.chunks,
@@ -305,13 +231,136 @@ class Pdf2VoiceApp(QMainWindow):
             title_announcement=announcement,
         )
 
-    # \u2500\u2500 Pipeline control \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── Chapter text editing ──────────────────────────────────────────────────
 
-    def _get_gender(self) -> str:
-        return "female" if self._btn_female.isChecked() else "male"
+    @pyqtSlot(int, str)
+    def _on_chapter_edit_saved(self, chapter_index: int, raw_text: str) -> None:
+        if self._book is None:
+            return
+        from src.pipeline.preprocessor import chunk_text as pp_chunk
+        from src.pipeline.preprocessor import SILENCE_PARA_S, SILENCE_CHUNK_S
+
+        new_chunks: list[str] = []
+        new_pauses: list[float] = []
+        for para in re.split(r"\n{2,}", raw_text):
+            para = para.strip()
+            if not para:
+                continue
+            para_chunks = pp_chunk(para)
+            for i, chunk in enumerate(para_chunks):
+                new_chunks.append(chunk)
+                new_pauses.append(
+                    SILENCE_PARA_S if i == len(para_chunks) - 1 else SILENCE_CHUNK_S
+                )
+
+        if not new_chunks:
+            self._log_panel.warn(f"Chapter {chapter_index}: empty text after editing, ignored.")
+            return
+
+        # Update StructuredBook in memory
+        chapter = next(
+            (ch for ch in self._book.chapters if ch.index == chapter_index), None
+        )
+        if chapter is None:
+            return
+        chapter.chunks       = new_chunks
+        chapter.chunk_pauses = new_pauses
+
+        # Update session and persist
+        if self._session:
+            self._session.update_chapter_text(chapter_index, new_chunks, new_pauses)
+            self._session.save()
+
+        # Reset chapter card to pending
+        self._chapter_section.set_pending(chapter_index)
+
+        # Refresh the expanded preview with updated chunks
+        from src.pipeline.tts_engine import _chapter_title_text
+        announcement = _chapter_title_text(
+            chapter.index, chapter.title, self._book.subdivision_type
+        )
+        self._chapter_section.show_chapter(
+            index=chapter.index,
+            title=chapter.title,
+            chunks=chapter.chunks,
+            subdivision_type=self._book.subdivision_type,
+            title_announcement=announcement,
+        )
+
+        self._log_panel.success(
+            f"Chapter {chapter_index} re-chunked: "
+            f"{len(new_chunks)} chunks, {sum(len(c) for c in new_chunks):,} characters"
+        )
+
+    # ── Chapter regeneration ──────────────────────────────────────────────────
+
+    @pyqtSlot(int)
+    def _on_chapter_regen_requested(self, chapter_index: int) -> None:
+        if self._app_state != "complete":
+            return
+        if self._book is None or self._session is None:
+            return
+
+        if not self._session.anchor_available():
+            QMessageBox.warning(
+                self,
+                "Voice Anchor Missing",
+                "The voice anchor file is missing.\n"
+                "Chapters can only be regenerated when the anchor still exists.",
+            )
+            return
+
+        chapter = next(
+            (ch for ch in self._book.chapters if ch.index == chapter_index), None
+        )
+        if chapter is None:
+            return
+
+        # Delete old WAV before regenerating
+        ch_state = self._session.chapter_state(chapter_index)
+        if ch_state and ch_state.output:
+            old_path = Path(ch_state.output)
+            old_path.unlink(missing_ok=True)
+
+        self._app_state = "regenerating"
+        self._chapter_section.set_regen_enabled_all(False)
+        self._chapter_section.set_running(chapter_index)
+        self._status_lbl.setText(f"Regenerating chapter {chapter_index} …")
+        self._log_panel.info(f"Regenerating chapter {chapter_index}: {chapter.title}")
+
+        self._regen_worker = RegenerationWorker(
+            chapter_index=chapter_index,
+            book=self._book,
+            session=self._session,
+            gender=self._info_bar.get_gender(),
+        )
+        self._regen_worker.log_info.connect(self._log_panel.info)
+        self._regen_worker.log_success.connect(self._log_panel.success)
+        self._regen_worker.log_warn.connect(self._log_panel.warn)
+        self._regen_worker.log_error.connect(self._log_panel.error)
+        self._regen_worker.chapter_running.connect(self._chapter_section.set_running)
+        self._regen_worker.chapter_done.connect(self._chapter_section.set_done)
+        self._regen_worker.chapter_error.connect(self._chapter_section.set_error)
+        self._regen_worker.regen_done.connect(self._on_regen_done)
+        self._regen_worker.finished.connect(self._on_regen_worker_finished)
+        self._regen_worker.start()
+
+    @pyqtSlot(int, object)
+    def _on_regen_done(self, chapter_index: int, final_path) -> None:
+        if final_path:
+            self._log_panel.success(f"Audiobook updated → {Path(final_path).name}")
+        self._status_lbl.setText(f"Chapter {chapter_index} regenerated")
+
+    @pyqtSlot()
+    def _on_regen_worker_finished(self) -> None:
+        self._app_state = "complete"
+        self._chapter_section.set_regen_enabled_all(True)
+        self._regen_worker = None
+
+    # ── Pipeline control ──────────────────────────────────────────────────────
 
     def _start_pipeline(self) -> None:
-        pdf_path = self._path_edit.text().strip()
+        pdf_path = self._info_bar.get_pdf_path()
         if not pdf_path:
             self._log_panel.error("Please select a PDF file first.")
             return
@@ -331,8 +380,8 @@ class Pdf2VoiceApp(QMainWindow):
                 done  = existing.completed_count
                 total = len(existing.chapters)
                 gender_note = (
-                    f"  (recorded as {existing.gender}, currently set to {self._get_gender()})"
-                    if existing.gender != self._get_gender() else ""
+                    f"  (recorded as {existing.gender}, currently set to {self._info_bar.get_gender()})"
+                    if existing.gender != self._info_bar.get_gender() else ""
                 )
                 dlg = QMessageBox(self)
                 dlg.setWindowTitle("Existing Session")
@@ -357,16 +406,19 @@ class Pdf2VoiceApp(QMainWindow):
         except Exception:
             pass  # session check is best-effort; proceed normally if it fails
 
-        self._book = None
+        self._book    = None
+        self._session = None
+        self._app_state = "running"
         self._pipeline_panel.reset_all()
-        self._chapter_list.clear()
+        self._chapter_section.clear()
         self._log_panel.clear()
-        self._preview_panel.show_placeholder()
+        self._chapter_section.set_edit_allowed(False)
         self._set_controls("running")
-        self._status_lbl.setText("Running \u2026")
+        self._status_lbl.setText("Running …")
+        self._info_bar.set_controls_enabled(False)
 
         self._worker = PipelineWorker(
-            pdf_path, self._get_gender(),
+            pdf_path, self._info_bar.get_gender(),
             force_fresh=force_fresh, force_resume=force_resume,
         )
         self._wire_worker(self._worker)
@@ -386,13 +438,15 @@ class Pdf2VoiceApp(QMainWindow):
         w.book_ready.connect(self._on_book_ready)
         w.chapters_ready.connect(self._on_chapters_ready)
         w.chapters_streaming.connect(self._on_chapters_streaming)
-        w.chapter_running.connect(self._chapter_list.set_running)
-        w.chapter_done.connect(self._chapter_list.set_done)
+        w.chapter_adapted.connect(self._on_chapter_adapted)
+        w.chapter_running.connect(self._chapter_section.set_running)
+        w.chapter_done.connect(self._chapter_section.set_done)
 
         w.awaiting_confirm.connect(self._on_awaiting_confirm)
         w.all_done.connect(self._on_all_done)
         w.failed.connect(self._on_failed)
         w.finished.connect(self._on_worker_finished)
+        w.stage_status.connect(self._pipeline_panel.set_status)
 
     @pyqtSlot(int, int, int)
     def _on_stage_progress(self, stage: int, value: int, maximum: int) -> None:
@@ -404,23 +458,32 @@ class Pdf2VoiceApp(QMainWindow):
 
     @pyqtSlot(list)
     def _on_chapters_ready(self, chapters: list) -> None:
-        self._chapter_list.load_chapters(chapters)
-        self._preview_panel.show_placeholder()
+        self._chapter_section.load_chapters(chapters)
 
     @pyqtSlot(list)
     def _on_chapters_streaming(self, chapters: list) -> None:
-        """Handle progressively streamed chapters during structuring."""
-        self._chapter_list.add_chapters(chapters)
+        self._chapter_section.add_chapters(chapters)
+
+    @pyqtSlot(int, str)
+    def _on_chapter_adapted(self, index: int, title: str) -> None:
+        """Called after each chapter is adapted — adds it to the list progressively."""
+        self._chapter_section.add_chapters([(index, title)])
 
     @pyqtSlot()
     def _on_awaiting_confirm(self) -> None:
+        self._app_state = "awaiting"
         self._confirm_bar.setVisible(True)
         self._set_controls("awaiting")
-        self._status_lbl.setText("Review chapters \u2026")
+        self._chapter_section.set_edit_allowed(True)
+        self._status_lbl.setText("Review chapters …")
 
     @pyqtSlot(list, object)
     def _on_all_done(self, output_paths: list, final_path) -> None:
-        self._status_lbl.setText(f"Done \u2014 {len(output_paths)} chapter(s)")
+        self._app_state = "complete"
+        if self._worker:
+            self._session = self._worker.get_session()
+        self._chapter_section.set_edit_allowed(True)
+        self._status_lbl.setText(f"Done — {len(output_paths)} chapter(s)")
 
     @pyqtSlot(str)
     def _on_failed(self, error: str) -> None:
@@ -430,31 +493,43 @@ class Pdf2VoiceApp(QMainWindow):
 
     @pyqtSlot()
     def _on_worker_finished(self) -> None:
-        self._set_controls("idle")
+        self._info_bar.set_controls_enabled(True)
+        if self._app_state != "complete":
+            self._set_controls("idle")
+        else:
+            self._start_btn.setEnabled(True)
+            self._pause_btn.setEnabled(False)
+            self._cancel_btn.setEnabled(False)
 
     def _confirm_tts(self) -> None:
         self._confirm_bar.setVisible(False)
+        self._chapter_section.set_edit_allowed(False)
         if self._worker:
             self._worker.confirm()
+        self._app_state = "running"
         self._set_controls("running")
-        self._log_panel.info("Confirmed \u2014 starting TTS generation \u2026")
-        self._status_lbl.setText("Generating \u2026")
+        self._log_panel.info("Confirmed — starting TTS generation …")
+        self._status_lbl.setText("Generating …")
+        self._log_panel.info("Confirmed — starting TTS generation …")
+        self._status_lbl.setText("Generating …")
 
     def _toggle_pause(self) -> None:
         if self._worker:
             paused = self._worker.toggle_pause()
-            self._pause_btn.setText("\u25b6  Resume" if paused else "\u23f8  Pause")
-            self._status_lbl.setText("Paused" if paused else "Running \u2026")
+            self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
+            self._status_lbl.setText("Paused" if paused else "Running …")
 
     def _cancel_pipeline(self) -> None:
         self._confirm_bar.setVisible(False)
         if self._worker:
             self._worker.cancel()
         self._log_panel.error("Pipeline cancelled.")
+        self._app_state = "idle"
         self._set_controls("idle")
+        self._info_bar.set_controls_enabled(True)
         self._status_lbl.setText("Cancelled")
 
-    # \u2500\u2500 Helper \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # ── Helper ────────────────────────────────────────────────────────────────
 
     def _set_controls(self, state: str) -> None:
         """state: 'idle' | 'awaiting' | 'running'"""

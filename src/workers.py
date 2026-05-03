@@ -23,6 +23,7 @@ class PipelineWorker(QThread):
     book_ready      = pyqtSignal(object)          # StructuredBook
     chapters_ready  = pyqtSignal(list)            # list[tuple[int, str]]
     chapters_streaming = pyqtSignal(list)         # list[Chapter] — progressive updates during structuring
+    chapter_adapted = pyqtSignal(int, str)        # index, title — emitted after each adaptation
     chapter_running = pyqtSignal(int)
     chapter_done    = pyqtSignal(int)
 
@@ -30,7 +31,7 @@ class PipelineWorker(QThread):
     awaiting_confirm = pyqtSignal()
     all_done         = pyqtSignal(list, object)   # output_paths, final_path | None
     failed           = pyqtSignal(str)
-
+    stage_status     = pyqtSignal(str)            # free-form status override (e.g. per-chapter adapt)
     def __init__(
         self,
         pdf_path: str,
@@ -165,7 +166,7 @@ class PipelineWorker(QThread):
             self.log_info.emit(f"Found: {total_pages} pages")
 
             def _extract_cb(cur: int, tot: int) -> None:
-                self.stage_progress.emit(0, cur, max(tot, 1))
+                self.stage_progress.emit(0, cur, tot)
 
             markdown = extract_pdf(pdf_path, _extract_cb)
             self.stage_done.emit(0)
@@ -180,11 +181,18 @@ class PipelineWorker(QThread):
             def _llm_log(msg: str) -> None:
                 self.log_info.emit(msg)
 
+            from src.config import (
+                ADAPTATION_ENABLED, ADAPTATION_PROVIDER, ADAPTATION_MODEL,
+                OPENROUTER_API_KEY, OPENROUTER_MODEL, OLLAMA_URL,
+            )
+
             def _chapters_streaming(chapters: list) -> None:
                 """Called when new chapters become available during structuring."""
-                # Emit signal for UI to display chapters progressively
-                for ch in chapters:
-                    self.chapters_streaming.emit([(ch.index, ch.title)])
+                # Only stream to UI if adaptation is disabled — otherwise chapters
+                # fly in one by one after adaptation via chapter_adapted signal.
+                if not ADAPTATION_ENABLED:
+                    for ch in chapters:
+                        self.chapters_streaming.emit([(ch.index, ch.title)])
 
             def _check_structure_pause() -> None:
                 """Check for pause during structuring."""
@@ -203,8 +211,8 @@ class PipelineWorker(QThread):
                 chapters_cb=_chapters_streaming,
                 check_pause=_check_structure_pause,
                 progress_cb=_llm_progress,
+                pdf_path=pdf_path,
             )
-            self.stage_done.emit(1)
             self.log_success.emit(
                 f'Structured: "{book.title}" — '
                 f"{len(book.chapters)} chapters, {book.total_chunks} chunks"
@@ -214,12 +222,85 @@ class PipelineWorker(QThread):
             self.log_info.emit(f"Voice: {book.voice_instruct}")
 
             self.book_ready.emit(book)
-            self.chapters_ready.emit([(ch.index, ch.title) for ch in book.chapters])
-            self._check_cancel()
 
+            # ── Audiobook Adaptation ───────────────────────────────────
+            from src.pipeline.adapter import adapt_chapter
+            from src.pipeline.preprocessor import (
+                chunk_text, SILENCE_PARA_S, SILENCE_CHUNK_S,
+            )
+            import re as _re
+
+            # Create session now so adaptation progress can be persisted incrementally
             session = create_session(book, pdf_hash, pdf_path, gender)
             session.save()
             self.log_info.emit("Session saved — generation can be resumed if interrupted.")
+
+            if ADAPTATION_ENABLED:
+                adapt_model = (
+                    OPENROUTER_MODEL if ADAPTATION_PROVIDER == "openrouter"
+                    else ADAPTATION_MODEL
+                )
+                self.log_info.emit(
+                    f"Adapting {len(book.chapters)} chapter(s) for audio "
+                    f"via {ADAPTATION_PROVIDER} / {adapt_model} …"
+                )
+                for chapter in book.chapters:
+                    self._check_cancel()
+                    self.stage_status.emit(
+                        f"Adapting {chapter.index}/{len(book.chapters)}: "
+                        f"{chapter.title[:40]} …"
+                    )
+                    self.log_info.emit(
+                        f"  Adapting chapter {chapter.index}: {chapter.title}"
+                    )
+                    try:
+                        adapted = adapt_chapter(
+                            title=chapter.title,
+                            chunks=chapter.chunks,
+                            provider=ADAPTATION_PROVIDER,
+                            model=adapt_model,
+                            api_key=OPENROUTER_API_KEY,
+                            ollama_base_url=OLLAMA_URL,
+                            log_cb=lambda msg: self.log_info.emit(msg),
+                        )
+                        # Re-chunk the adapted prose
+                        new_chunks: list[str] = []
+                        new_pauses: list[float] = []
+                        for para in _re.split(r"\n{2,}", adapted):
+                            para = para.strip()
+                            if not para:
+                                continue
+                            para_chunks = chunk_text(para)
+                            for i, c in enumerate(para_chunks):
+                                new_chunks.append(c)
+                                new_pauses.append(
+                                    SILENCE_PARA_S if i == len(para_chunks) - 1
+                                    else SILENCE_CHUNK_S
+                                )
+                        if new_chunks:
+                            chapter.adapted_text = adapted
+                            chapter.chunks = new_chunks
+                            chapter.chunk_pauses = new_pauses
+                            # Mirror adapted content into session and persist
+                            ch_state = session.chapter_state(chapter.index)
+                            if ch_state:
+                                ch_state.adapted_text = adapted
+                                ch_state.chunks = new_chunks
+                                ch_state.chunk_pauses = new_pauses
+                            self.chapter_adapted.emit(chapter.index, chapter.title)
+                    except Exception as exc:
+                        self.log_warn.emit(
+                            f"  Adaptation failed for '{chapter.title}': {exc}"
+                            " — using original text"
+                        )
+                        self.chapter_adapted.emit(chapter.index, chapter.title)
+                    session.save()
+                self.log_success.emit("Audiobook adaptation complete.")
+            else:
+                # No adaptation — emit all chapters at once
+                self.chapters_ready.emit([(ch.index, ch.title) for ch in book.chapters])
+            self._check_cancel()
+            self.stage_done.emit(1)
             self.log_info.emit(
                 "Review the chapter previews, then click "
                 "Confirm & Generate to start TTS generation."
@@ -278,7 +359,155 @@ class PipelineWorker(QThread):
         if final_path and len(output_paths) > 1:
             self.log_success.emit(f"  Complete → {final_path.name}")
 
+        self._session_ref = session   # stash so app.py can retrieve after completion
         self.all_done.emit(output_paths, final_path)
+
+    def get_session(self):
+        """Return the BookSession after the pipeline completes."""
+        return getattr(self, "_session_ref", None)
+
+
+class RegenerationWorker(QThread):
+    """Re-generates a single chapter using the existing voice anchor."""
+
+    # ── Log signals ────────────────────────────────────────────────────
+    log_info    = pyqtSignal(str)
+    log_success = pyqtSignal(str)
+    log_warn    = pyqtSignal(str)
+    log_error   = pyqtSignal(str)
+
+    # ── Chapter signals ────────────────────────────────────────────────
+    chapter_running = pyqtSignal(int)
+    chapter_done    = pyqtSignal(int)
+    chapter_error   = pyqtSignal(int)
+
+    # ── Completion signal ──────────────────────────────────────────────
+    regen_done = pyqtSignal(int, object)   # chapter_index, final_path | None
+
+    def __init__(self, chapter_index: int, book, session, gender: str) -> None:
+        super().__init__()
+        self._chapter_index = chapter_index
+        self._book          = book
+        self._session       = session
+        self._gender        = gender
+        self._cancelled     = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            self._run_regen()
+        except Exception as exc:
+            self.log_error.emit(str(exc))
+            self.chapter_error.emit(self._chapter_index)
+
+    def _run_regen(self) -> None:
+        from pathlib import Path
+        from src.pipeline.tts_engine import (
+            _chapter_title_text,
+            _load_base_and_prompt,
+            _merge_and_save,
+            _merge_chapters,
+            _resolve_device,
+            _safe_filename,
+        )
+        from src.config import OUTPUT_DIR
+
+        chapter = next(
+            (ch for ch in self._book.chapters if ch.index == self._chapter_index),
+            None,
+        )
+        if chapter is None:
+            self.log_error.emit(f"Chapter {self._chapter_index} not found.")
+            self.chapter_error.emit(self._chapter_index)
+            return
+
+        if not self._session.anchor_available():
+            self.log_error.emit("Voice anchor not found — cannot regenerate.")
+            self.chapter_error.emit(self._chapter_index)
+            return
+
+        device = _resolve_device(self.log_info.emit)
+        anchor_path = Path(self._session.anchor_path)
+
+        self.chapter_running.emit(self._chapter_index)
+
+        tts, voice_prompt = _load_base_and_prompt(
+            anchor_path, device, self.log_info.emit, None
+        )
+
+        safe_title = _safe_filename(self._book.title)
+        safe_ch    = _safe_filename(chapter.title)
+        chapter_path = OUTPUT_DIR / f"{safe_title}_ch{chapter.index:02d}_{safe_ch}.wav"
+
+        chunk_wavs: list[tuple] = []
+        pauses_out: list[float] = []
+
+        # Title announcement
+        title_text = _chapter_title_text(
+            chapter.index, chapter.title, self._book.subdivision_type
+        )
+        try:
+            wavs, sr = tts.generate_voice_clone(
+                text=title_text,
+                voice_clone_prompt=voice_prompt,
+                language=self._book.language,
+            )
+            chunk_wavs.append((wavs[0], sr))
+            pauses_out.append(1.0)
+        except Exception as exc:
+            self.log_warn.emit(f"Title announcement failed ({exc}), skipping")
+
+        # Content chunks
+        for ck_idx, chunk in enumerate(chapter.chunks):
+            if self._cancelled:
+                break
+            if not chunk.strip():
+                continue
+            try:
+                wavs, sr = tts.generate_voice_clone(
+                    text=chunk,
+                    voice_clone_prompt=voice_prompt,
+                    language=self._book.language,
+                )
+                chunk_wavs.append((wavs[0], sr))
+                pause = (
+                    chapter.chunk_pauses[ck_idx]
+                    if ck_idx < len(chapter.chunk_pauses)
+                    else 0.6
+                )
+                pauses_out.append(pause)
+            except Exception as exc:
+                self.log_warn.emit(f"Chunk {ck_idx + 1} error ({exc}), skipping")
+
+        if not chunk_wavs:
+            self.log_error.emit(f"No audio generated for chapter {self._chapter_index}")
+            self.chapter_error.emit(self._chapter_index)
+            return
+
+        _merge_and_save(chunk_wavs, chapter_path, self.log_info.emit, pauses_out)
+        self._session.mark_chapter_done(self._chapter_index, chapter_path)
+        self._session.save()
+
+        self.chapter_done.emit(self._chapter_index)
+        self.log_success.emit(f"Regenerated: {chapter_path.name}")
+
+        # Re-merge complete audiobook when all chapters are done
+        final_path = None
+        if self._session.is_complete:
+            all_paths = [
+                Path(ch.output)
+                for ch in self._session.chapters
+                if ch.output and Path(ch.output).is_file()
+            ]
+            if len(all_paths) > 1:
+                final_path = OUTPUT_DIR / f"{safe_title}_complete.wav"
+                _merge_chapters(all_paths, final_path, self.log_info.emit)
+            elif all_paths:
+                final_path = all_paths[0]
+
+        self.regen_done.emit(self._chapter_index, final_path)
 
 
 class _Cancelled(Exception):

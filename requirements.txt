@@ -4,7 +4,3 @@ ollama>=0.4.0
 qwen-tts>=0.1.0
 soundfile>=0.12.0
 python-dotenv>=1.0.0
-
-# PDF Extraction: Docling for layout-aware extraction (OCR disabled for memory efficiency)
-# No system dependencies required — uses Docling's native layout models
-docling>=2.0.0

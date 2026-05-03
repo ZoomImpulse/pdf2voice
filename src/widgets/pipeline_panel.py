@@ -17,7 +17,7 @@ _STAGE_DONE: dict[int, str] = {
     2: "Voice ready",
     3: "All done",
 }
-_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 
 
 class PipelinePanel(QWidget):
@@ -99,6 +99,10 @@ class PipelinePanel(QWidget):
         self._bar.setValue(0)
         self._bar.setVisible(False)
         self._stop_spinner()
+
+    def set_status(self, text: str) -> None:
+        """Override the current stage label with a custom message (e.g. per-chapter progress)."""
+        self._status_lbl.setText(text)
 
     def reset_all(self) -> None:
         self._stop_spinner()

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QScrollArea, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QScrollArea,
+    QSizePolicy, QPushButton, QTextEdit,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import pyqtSignal, Qt
 
 
 class PreviewPanel(QWidget):
+    edit_saved = pyqtSignal(int, str)   # chapter_index, joined edited text
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("preview-panel")
@@ -24,6 +27,13 @@ class PreviewPanel(QWidget):
         title_lbl.setObjectName("side-panel-title")
         hl.addWidget(title_lbl)
         hl.addStretch()
+
+        self._edit_btn = QPushButton("✎  Edit")
+        self._edit_btn.setObjectName("btn-edit-chapter")
+        self._edit_btn.setVisible(False)
+        self._edit_btn.clicked.connect(self._enter_edit_mode)
+        hl.addWidget(self._edit_btn)
+
         layout.addWidget(hdr)
 
         sep = QFrame()
@@ -38,12 +48,32 @@ class PreviewPanel(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         layout.addWidget(self._scroll, stretch=1)
 
-        # Default placeholder
+        # Internal state
+        self._edit_allowed   = False
+        self._in_edit_mode   = False
+        self._current_index  = -1
+        self._current_title  = ""
+        self._current_chunks: list[str] = []
+        self._current_subdivision = ""
+        self._current_announcement = ""
+        self._text_edit: QTextEdit | None = None
+        self._char_lbl: QLabel | None = None
+
         self._show_placeholder_widget()
 
     # ── Public API ────────────────────────────────────────────────────
 
+    def set_edit_allowed(self, allowed: bool) -> None:
+        self._edit_allowed = allowed
+        if not allowed:
+            self._edit_btn.setVisible(False)
+        elif self._current_index >= 0 and not self._in_edit_mode:
+            self._edit_btn.setVisible(True)
+
     def clear(self) -> None:
+        self._edit_btn.setVisible(False)
+        self._in_edit_mode = False
+        self._current_index = -1
         self._show_placeholder_widget()
 
     def show_placeholder(
@@ -54,6 +84,8 @@ class PreviewPanel(QWidget):
             lbl.setText(message)
         else:
             self._show_placeholder_widget(message)
+        self._edit_btn.setVisible(False)
+        self._in_edit_mode = False
 
     def show_chapter(
         self,
@@ -63,6 +95,32 @@ class PreviewPanel(QWidget):
         subdivision_type: str,
         title_announcement: str,
     ) -> None:
+        # Cache for edit mode
+        self._current_index        = index
+        self._current_title        = title
+        self._current_chunks       = list(chunks)
+        self._current_subdivision  = subdivision_type
+        self._current_announcement = title_announcement
+        self._in_edit_mode         = False
+
+        self._render_read_only()
+
+        if self._edit_allowed:
+            self._edit_btn.setVisible(True)
+            self._edit_btn.setText("✎  Edit")
+            self._edit_btn.setEnabled(True)
+        else:
+            self._edit_btn.setVisible(False)
+
+    # ── Private: read-only rendering ──────────────────────────────────
+
+    def _render_read_only(self) -> None:
+        index             = self._current_index
+        title             = self._current_title
+        chunks            = self._current_chunks
+        subdivision_type  = self._current_subdivision
+        title_announcement = self._current_announcement
+
         content = QWidget()
         content.setObjectName("preview-content")
         cl = QVBoxLayout(content)
@@ -71,7 +129,7 @@ class PreviewPanel(QWidget):
 
         # ── Chapter title ─────────────────────────────────────────────
         label = f"{subdivision_type} {index}"
-        full  = f"{label} \u2013 {title}" if title.strip() else label
+        full  = f"{label} – {title}" if title.strip() else label
         ch_title = QLabel(full)
         ch_title.setObjectName("preview-chapter-title")
         ch_title.setWordWrap(True)
@@ -121,7 +179,6 @@ class PreviewPanel(QWidget):
             ck.setContentsMargins(14, 12, 14, 14)
             ck.setSpacing(8)
 
-            # Header row: numbered badge + char count
             hrow = QHBoxLayout()
             hrow.setSpacing(8)
 
@@ -137,7 +194,6 @@ class PreviewPanel(QWidget):
             hrow.addStretch()
             ck.addLayout(hrow)
 
-            # Body text
             body = QLabel(chunk)
             body.setObjectName("chunk-body")
             body.setWordWrap(True)
@@ -152,6 +208,81 @@ class PreviewPanel(QWidget):
 
         self._scroll.setWidget(content)
         self._scroll.verticalScrollBar().setValue(0)
+
+    # ── Private: edit mode ────────────────────────────────────────────
+
+    def _enter_edit_mode(self) -> None:
+        self._in_edit_mode = True
+        self._edit_btn.setVisible(False)
+
+        content = QWidget()
+        content.setObjectName("preview-content")
+        cl = QVBoxLayout(content)
+        cl.setContentsMargins(20, 20, 20, 20)
+        cl.setSpacing(10)
+
+        # Chapter title label
+        label = f"{self._current_subdivision} {self._current_index}"
+        full  = f"{label} – {self._current_title}" if self._current_title.strip() else label
+        ch_title = QLabel(full)
+        ch_title.setObjectName("preview-chapter-title")
+        ch_title.setWordWrap(True)
+        cl.addWidget(ch_title)
+
+        hint = QLabel("Bearbeite den Text. Absätze (Leerzeile) werden beim Speichern neu in Chunks aufgeteilt.")
+        hint.setObjectName("preview-meta")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+
+        # Text editor with chunks joined by double newline
+        self._text_edit = QTextEdit()
+        self._text_edit.setObjectName("chapter-text-edit")
+        self._text_edit.setPlainText("\n\n".join(self._current_chunks))
+        self._text_edit.textChanged.connect(self._update_char_count)
+        cl.addWidget(self._text_edit, stretch=1)
+
+        self._char_lbl = QLabel("")
+        self._char_lbl.setObjectName("preview-meta")
+        cl.addWidget(self._char_lbl)
+        self._update_char_count()
+
+        # Save / Cancel buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.setObjectName("btn-edit-cancel")
+        cancel_btn.clicked.connect(self._cancel_edit)
+        btn_row.addWidget(cancel_btn)
+
+        save_btn = QPushButton("✓  Speichern & Re-chunk")
+        save_btn.setObjectName("btn-edit-save")
+        save_btn.clicked.connect(self._save_edit)
+        btn_row.addWidget(save_btn)
+
+        cl.addLayout(btn_row)
+
+        self._scroll.setWidget(content)
+        self._scroll.verticalScrollBar().setValue(0)
+
+    def _update_char_count(self) -> None:
+        if self._text_edit and self._char_lbl:
+            n = len(self._text_edit.toPlainText())
+            self._char_lbl.setText(f"{n:,} Zeichen")
+
+    def _cancel_edit(self) -> None:
+        self._in_edit_mode = False
+        self._render_read_only()
+        if self._edit_allowed:
+            self._edit_btn.setVisible(True)
+
+    def _save_edit(self) -> None:
+        if self._text_edit is None:
+            return
+        text = self._text_edit.toPlainText().strip()
+        self._in_edit_mode = False
+        # Emit raw text; app.py handles re-chunking and data updates
+        self.edit_saved.emit(self._current_index, text)
 
     # ── Internals ─────────────────────────────────────────────────────
 

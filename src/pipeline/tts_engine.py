@@ -190,13 +190,10 @@ def generate_audiobook(
     elif output_paths:
         final_path = output_paths[0]
 
-    # Only delete the transient anchor; session anchors are kept for future resumes.
-    if session is None:
+    # Delete transient anchor only (no session); persistent sessions are
+    # managed by the caller (app.py) so regeneration remains possible.
+    if session is None and anchor_path:
         anchor_path.unlink(missing_ok=True)
-    elif session.is_complete:
-        session.delete()
-        if anchor_path and anchor_path.is_file():
-            anchor_path.unlink(missing_ok=True)
 
     return output_paths, final_path
 
@@ -217,7 +214,7 @@ def _generate_anchor(
     anchor_text = _ANCHOR_TEXTS.get(language.lower(), _ANCHOR_TEXT_DEFAULT)
 
     if log_cb:
-        log_cb(f"Voice Anchor: Lade Modell {TTS_DESIGN_MODEL} …")
+        log_cb(f"Voice Anchor: Loading model {TTS_DESIGN_MODEL} …")
     if anchor_cb:
         anchor_cb(5.0)
 
@@ -231,7 +228,7 @@ def _generate_anchor(
         return None
 
     if log_cb:
-        log_cb("Voice Anchor: Modell geladen — generiere Stimmreferenz …")
+        log_cb("Voice Anchor: Model loaded — generating voice reference …")
     if anchor_cb:
         anchor_cb(35.0)
 
@@ -245,12 +242,12 @@ def _generate_anchor(
     sf.write(str(anchor_path), wavs[0], sr)
 
     if log_cb:
-        log_cb(f"Voice Anchor: Referenz gespeichert ({len(wavs[0]) / sr:.1f}s)")
+        log_cb(f"Voice Anchor: Reference saved ({len(wavs[0]) / sr:.1f}s)")
     if anchor_cb:
         anchor_cb(60.0)
 
     if log_cb:
-        log_cb("Voice Anchor: VoiceDesign-Modell wird entladen …")
+        log_cb("Voice Anchor: Unloading VoiceDesign model …")
     del tts
     gc.collect()
     if torch.cuda.is_available():
@@ -271,7 +268,7 @@ def _load_base_and_prompt(
     from qwen_tts import Qwen3TTSModel
 
     if log_cb:
-        log_cb(f"Voice Anchor: Lade TTS-Basismodell {TTS_BASE_MODEL} …")
+        log_cb(f"Voice Anchor: Loading TTS base model {TTS_BASE_MODEL} …")
     if anchor_cb:
         anchor_cb(75.0)
 
@@ -282,7 +279,7 @@ def _load_base_and_prompt(
     )
 
     if log_cb:
-        log_cb("Voice Anchor: Extrahiere Stimmprofil aus Referenzaudio …")
+        log_cb("Voice Anchor: Extracting voice profile from reference audio …")
     if anchor_cb:
         anchor_cb(90.0)
 
@@ -292,7 +289,7 @@ def _load_base_and_prompt(
     )
 
     if log_cb:
-        log_cb("Voice Anchor: Stimmprofil gesichert — Stimme ist bereit.")
+        log_cb("Voice Anchor: Voice profile saved — voice is ready.")
     if anchor_cb:
         anchor_cb(100.0)
 

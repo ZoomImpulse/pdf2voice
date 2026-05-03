@@ -8,6 +8,7 @@ from typing import Callable
 import ollama
 
 from src.config import GENRE_PROMPTS, LLM_MODEL, TTS_VOICE_INSTRUCT
+from src.pipeline.extractor import extract_toc as _extract_toc, extract_toc_from_pages as _extract_toc_vision
 from src.pipeline.preprocessor import preprocess as _preprocess
 
 # Genre keys exposed to the LLM — must stay in sync with GENRE_PROMPTS in config.py.
@@ -29,7 +30,23 @@ JSON format:
   "subdivision_type": "word the book uses for chapters, e.g. Kapitel, Teil, Chapter, Part, Section — or empty string if unclear"
 }}
 """
+# Appended to METADATA_PROMPT when the heuristic suspects over-splitting.
+STRUCTURE_FIX_ADDENDUM = """\
+The chapter detector may have over-split this document (e.g. verse numbers or
+sub-headings were mistaken for chapter boundaries).
 
+The detected chapter titles (0-based index) are listed below.
+Add a "merge_groups" key to your JSON: a list of lists, where each inner list
+contains the 0-based indices of chapters that belong to the same true chapter
+and should be merged. Use the first chapter\'s title as the merged title.
+If the structure looks correct, return \"merge_groups\": [].
+
+Example (merging verses 0-3 into one chapter, 4-7 into another):
+  \"merge_groups\": [[0,1,2,3],[4,5,6,7]]
+
+Detected chapter titles:
+{chapter_titles}
+"""
 
 @dataclass
 class Chapter:
@@ -37,6 +54,7 @@ class Chapter:
     title: str
     chunks: list[str] = field(default_factory=list)
     chunk_pauses: list[float] = field(default_factory=list)
+    adapted_text: str | None = None   # LLM-adapted prose; None = use chunks as-is
 
 
 @dataclass
@@ -60,20 +78,36 @@ def structure_content(
     check_pause: Callable[[], None] | None = None,
     progress_cb: Callable[[int], None] | None = None,
     model: str = LLM_MODEL,
+    pdf_path: str | None = None,
 ) -> StructuredBook:
     """Structure markdown content for TTS generation.
 
     Pipeline:
     1. preprocessor.py cleans the text, detects chapters, expands abbreviations,
        and produces TTS chunks — all without any LLM call.
+       When pdf_path is given the PDF outline (TOC) is extracted first and used
+       to guide chapter splitting, overriding pure H2-heuristics where reliable.
     2. A short excerpt (~2 500 chars) is sent to the LLM to detect language and genre.
     3. Results are merged into a StructuredBook.
     """
     # ── Step 1: pre-process (no LLM) ─────────────────────────────────────────
     if log_cb:
-        log_cb("Preprocessing: Text wird bereinigt und Kapitelstruktur extrahiert …")
+        log_cb("Preprocessing: Cleaning text and extracting chapter structure …")
 
-    pre = _preprocess(markdown)
+    # Try to extract the PDF's embedded outline for reliable chapter boundaries
+    toc: list[tuple[int, str, int]] = []
+    if pdf_path:
+        toc = _extract_toc(pdf_path)
+        if log_cb:
+            if toc:
+                log_cb(f"Preprocessing: PDF table of contents found ({len(toc)} entries) — using for chapter boundaries")
+            else:
+                log_cb("Preprocessing: No embedded TOC found — trying vision extraction …")
+                toc = _extract_toc_vision(pdf_path, log_cb=log_cb)
+                if not toc and log_cb:
+                    log_cb("Preprocessing: Vision extraction found no TOC — falling back to heading detection")
+
+    pre = _preprocess(markdown, toc=toc or None, log_cb=log_cb)
 
     chapters: list[Chapter] = [
         Chapter(index=i + 1, title=raw.title, chunks=raw.chunks, chunk_pauses=raw.chunk_pauses)
@@ -93,8 +127,8 @@ def structure_content(
     if log_cb:
         total_chunks = sum(len(ch.chunks) for ch in chapters)
         log_cb(
-            f"Preprocessing: {len(chapters)} Kapitel, {total_chunks} Chunks "
-            f"({len(markdown):,} → {sum(len(c) for ch in chapters for c in ch.chunks):,} Zeichen)"
+            f"Preprocessing: {len(chapters)} chapters, {total_chunks} chunks "
+            f"({len(markdown):,} → {sum(len(c) for ch in chapters for c in ch.chunks):,} chars)"
         )
 
     # ── Step 2: LLM metadata detection (tiny sample only) ────────────────────
@@ -104,9 +138,13 @@ def structure_content(
     subdivision_type = pre.subdivision_type  # pattern-detected — overridden by LLM if needed
 
     if log_cb:
-        log_cb(f"LLM: Metadaten werden erkannt ({len(pre.sample):,} Zeichen) …")
+        log_cb(f"LLM: Detecting metadata ({len(pre.sample):,} chars) …")
 
-    meta = _call_llm_for_metadata(pre.sample, model, log_cb, check_pause, progress_cb)
+    meta = _call_llm_for_metadata(
+        pre.sample, model, log_cb, check_pause, progress_cb,
+        structure_suspect=pre.structure_suspect,
+        chapters=chapters,
+    )
     if meta:
         title            = meta.get("title", title) or title
         language         = meta.get("language", language) or language
@@ -114,6 +152,11 @@ def structure_content(
         llm_subdiv       = meta.get("subdivision_type", "").strip()
         if llm_subdiv and not subdivision_type:
             subdivision_type = llm_subdiv
+
+        # ── Apply merge_groups if present ──────────────────────────────
+        merge_groups: list[list[int]] = meta.get("merge_groups", [])
+        if merge_groups and pre.structure_suspect:
+            chapters = _apply_merge_groups(chapters, merge_groups, log_cb)
 
     if not subdivision_type:
         subdivision_type = "Kapitel" if language == "de" else "Chapter"
@@ -124,6 +167,7 @@ def structure_content(
             index=ch.index,
             title=_strip_label_prefix(ch.title, ch.index, subdivision_type),
             chunks=ch.chunks,
+            chunk_pauses=ch.chunk_pauses,
         )
         for ch in chapters
     ]
@@ -131,11 +175,11 @@ def structure_content(
     voice_instruct = GENRE_PROMPTS.get(genre, TTS_VOICE_INSTRUCT)
 
     if log_cb and genre:
-        log_cb(f"LLM: Genre erkannt: {genre}")
+        log_cb(f"LLM: Genre detected: {genre}")
     if log_cb:
-        log_cb(f"LLM: Unterteilungstyp: {subdivision_type}")
+        log_cb(f"LLM: Subdivision type: {subdivision_type}")
     if log_cb and voice_instruct:
-        log_cb(f"LLM: Stimmanweisung: {voice_instruct[:60]}…")
+        log_cb(f"LLM: Voice instruction: {voice_instruct[:60]}…")
 
     return StructuredBook(
         title=title,
@@ -158,16 +202,33 @@ def _call_llm_for_metadata(
     log_cb: Callable[[str], None] | None = None,
     check_pause: Callable[[], None] | None = None,
     progress_cb: Callable[[int], None] | None = None,
+    structure_suspect: bool = False,
+    chapters: list | None = None,
 ) -> dict | None:
-    """Send a short sample to the LLM and return {title, language, genre, subdivision_type}."""
+    """Send a short sample to the LLM and return metadata dict.
+
+    When structure_suspect=True the chapter title list is appended and the
+    response may additionally contain a 'merge_groups' key.
+    """
     if check_pause:
         check_pause()
     system = METADATA_PROMPT.format(
         genre_keys=", ".join(f'"{k}"' for k in _GENRE_KEYS),
     )
+    if structure_suspect and chapters:
+        title_list = "\n".join(
+            f"{i}: {ch.title}" for i, ch in enumerate(chapters)
+        )
+        system = system.rstrip() + "\n\n" + STRUCTURE_FIX_ADDENDUM.format(
+            chapter_titles=title_list
+        )
     try:
         if log_cb:
-            log_cb("LLM: Warte auf Modellantwort …")
+            if structure_suspect:
+                log_cb("LLM: Structure check active (too many/thin chapters detected) …")
+            log_cb("LLM: Waiting for model response …")
+        # Use a larger context window when the title list is included
+        ctx_size = 8192 if structure_suspect else 4096
         stream = ollama.chat(
             model=model,
             messages=[
@@ -179,7 +240,7 @@ def _call_llm_for_metadata(
                 "top_p": 0.8,
                 "top_k": 20,
                 "min_p": 0,
-                "num_ctx": 4096,   # tiny context — sample is ≤2 500 chars
+                "num_ctx": ctx_size,
                 "num_gpu": 99,
             },
             think=False,
@@ -195,19 +256,19 @@ def _call_llm_for_metadata(
             if progress_cb:
                 progress_cb(token_count)
             if log_cb and token_count - last_logged >= _LOG_TOKEN_INTERVAL:
-                log_cb(f"LLM: {token_count} Tokens empfangen …")
+                log_cb(f"LLM: {token_count} tokens received …")
                 last_logged = token_count
         if log_cb:
-            log_cb(f"LLM: Metadaten empfangen ({token_count} Tokens)")
+            log_cb(f"LLM: Metadata received ({token_count} tokens)")
         raw = _strip_code_fences("".join(parts).strip())
         return json.loads(raw)
     except (json.JSONDecodeError, KeyError) as e:
         if log_cb:
-            log_cb(f"LLM: Metadaten-Parse fehlgeschlagen ({e}) — Standardwerte werden verwendet")
+            log_cb(f"LLM: Metadata parse failed ({e}) — using defaults")
         return None
     except Exception as e:
         if log_cb:
-            log_cb(f"LLM: Metadaten-Erkennung fehlgeschlagen ({e}) — Standardwerte werden verwendet")
+            log_cb(f"LLM: Metadata detection failed ({e}) — using defaults")
         return None
 
 
@@ -228,4 +289,55 @@ def _strip_code_fences(text: str) -> str:
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\s*```$",          "", text, flags=re.MULTILINE)
     return text.strip()
+
+
+def _apply_merge_groups(
+    chapters: list[Chapter],
+    merge_groups: list[list[int]],
+    log_cb: Callable[[str], None] | None = None,
+) -> list[Chapter]:
+    """Merge chapters according to groups returned by the LLM.
+
+    Any chapter index not mentioned in merge_groups is kept as a standalone
+    single-item group, preserving the full chapter set.
+    """
+    n = len(chapters)
+    # Validate indices — silently clamp to valid range
+    clean_groups: list[list[int]] = []
+    seen: set[int] = set()
+    for group in merge_groups:
+        valid = [i for i in group if 0 <= i < n and i not in seen]
+        if valid:
+            clean_groups.append(valid)
+            seen.update(valid)
+
+    # Any chapter not mentioned becomes its own group
+    ungrouped = [i for i in range(n) if i not in seen]
+
+    # Re-order: merged groups in the order of their first index, then ungrouped
+    all_groups: list[list[int]] = sorted(
+        clean_groups + [[i] for i in ungrouped],
+        key=lambda g: g[0],
+    )
+
+    if log_cb:
+        log_cb(
+            f"LLM: Chapter structure corrected — {n} sections → {len(all_groups)} chapters"
+        )
+
+    merged: list[Chapter] = []
+    for new_idx, group in enumerate(all_groups, start=1):
+        primary = chapters[group[0]]
+        combined_chunks: list[str] = []
+        combined_pauses: list[float] = []
+        for i in group:
+            combined_chunks.extend(chapters[i].chunks)
+            combined_pauses.extend(chapters[i].chunk_pauses)
+        merged.append(Chapter(
+            index=new_idx,
+            title=primary.title,
+            chunks=combined_chunks,
+            chunk_pauses=combined_pauses,
+        ))
+    return merged
 

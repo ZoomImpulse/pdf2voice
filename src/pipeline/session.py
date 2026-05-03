@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SESSION_VERSION = 1
+SESSION_VERSION = 3
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -21,6 +21,8 @@ class ChapterState:
     index: int
     title: str
     chunks: list[str]
+    chunk_pauses: list[float] = field(default_factory=list)
+    adapted_text: str | None = None   # LLM-adapted prose stored alongside original
     done: bool = False
     output: str | None = None  # absolute path to the chapter .wav file
 
@@ -75,6 +77,16 @@ class BookSession:
             ch.done = True
             ch.output = str(output_path)
 
+    def update_chapter_text(
+        self, index: int, chunks: list[str], pauses: list[float]
+    ) -> None:
+        ch = self.chapter_state(index)
+        if ch:
+            ch.chunks = chunks
+            ch.chunk_pauses = pauses
+            ch.done = False
+            ch.output = None
+
     # ── Persistence ───────────────────────────────────────────────────
 
     def save(self) -> None:
@@ -93,9 +105,21 @@ class BookSession:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if data.get("version") != SESSION_VERSION:
+            version = data.get("version")
+            if version not in (1, 2, 3):
                 return None
-            data["chapters"] = [ChapterState(**ch) for ch in data.pop("chapters", [])]
+            raw_chapters = data.pop("chapters", [])
+            chapters: list[ChapterState] = []
+            for ch in raw_chapters:
+                # v1 migration: synthesise default pauses if missing
+                if "chunk_pauses" not in ch:
+                    ch["chunk_pauses"] = [1.2] * len(ch.get("chunks", []))
+                # v2 migration: add adapted_text field
+                if "adapted_text" not in ch:
+                    ch["adapted_text"] = None
+                chapters.append(ChapterState(**ch))
+            data["chapters"] = chapters
+            data["version"] = SESSION_VERSION
             return BookSession(**data)
         except Exception:
             return None
@@ -114,9 +138,14 @@ def compute_pdf_hash(pdf_path: str | Path) -> str:
 
 def create_session(book, pdf_hash_str: str, pdf_path: str, gender: str) -> BookSession:
     """Build a fresh BookSession from a StructuredBook (before any TTS)."""
-    from src.pipeline.structurer import StructuredBook  # avoid circular import at module level
     chapters = [
-        ChapterState(index=ch.index, title=ch.title, chunks=ch.chunks)
+        ChapterState(
+            index=ch.index,
+            title=ch.title,
+            chunks=ch.chunks,
+            chunk_pauses=ch.chunk_pauses,
+            adapted_text=ch.adapted_text,
+        )
         for ch in book.chapters
     ]
     return BookSession(
@@ -138,7 +167,13 @@ def book_from_session(session: BookSession):
     """Reconstruct a StructuredBook from a saved BookSession (for resume)."""
     from src.pipeline.structurer import Chapter, StructuredBook
     chapters = [
-        Chapter(index=ch.index, title=ch.title, chunks=ch.chunks)
+        Chapter(
+            index=ch.index,
+            title=ch.title,
+            chunks=ch.chunks,
+            chunk_pauses=ch.chunk_pauses,
+            adapted_text=ch.adapted_text,
+        )
         for ch in session.chapters
     ]
     return StructuredBook(

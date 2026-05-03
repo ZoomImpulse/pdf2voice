@@ -9,6 +9,10 @@ QMainWindow, QWidget {
     font-size: 13px;
 }
 
+QLabel {
+    background: transparent;
+}
+
 QSplitter::handle {
     background: #1e1e2e;
 }
@@ -100,24 +104,57 @@ QPushButton#browse-btn:hover {
     color: #e2e8f0;
 }
 
-/* ── Radio buttons ───────────────────────────────────────────────── */
-QRadioButton {
-    color: #94a3b8;
-    spacing: 8px;
-    padding: 4px 0;
-}
-QRadioButton::indicator {
-    width: 16px;
-    height: 16px;
-    border: 2px solid #2e2e3e;
-    border-radius: 8px;
+/* ── Voice gender pill toggle ────────────────────────────────────── */
+QPushButton#voice-pill-left,
+QPushButton#voice-pill-right {
     background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0 16px;
 }
-QRadioButton::indicator:checked {
-    background: #7c3aed;
-    border-color: #7c3aed;
+QPushButton#voice-pill-left  { border-radius: 0; border-top-left-radius: 8px; border-bottom-left-radius: 8px; border-right: none; }
+QPushButton#voice-pill-right { border-radius: 0; border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+
+QPushButton#voice-pill-left:hover,
+QPushButton#voice-pill-right:hover {
+    background: #1e1e2e;
+    color: #94a3b8;
 }
-QRadioButton:checked { color: #e2e8f0; }
+
+QPushButton#voice-pill-left-active {
+    background: #2e1f5e;
+    border: 1px solid #7c3aed;
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+    color: #c4b5fd;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0 16px;
+}
+QPushButton#voice-pill-right-active {
+    background: #2e1f5e;
+    border: 1px solid #7c3aed;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    color: #c4b5fd;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0 16px;
+}
+
+QPushButton#voice-pill-left:disabled,
+QPushButton#voice-pill-right:disabled,
+QPushButton#voice-pill-left-active:disabled,
+QPushButton#voice-pill-right-active:disabled {
+    opacity: 0.4;
+}
 
 /* ── Settings labels ─────────────────────────────────────────────── */
 QLabel#settings-key {
@@ -246,10 +283,10 @@ QFrame#chapter-card {
     border-left: none;
 }
 
-QLabel#card-dot-pending { color: #2d3748; font-size: 13px; }
-QLabel#card-dot-running { color: #a78bfa; font-size: 13px; }
-QLabel#card-dot-done    { color: #22c55e; font-size: 13px; }
-QLabel#card-dot-error   { color: #ef4444; font-size: 13px; }
+QFrame#card-dot-pending { background: #2d3748; border-radius: 4px; }
+QFrame#card-dot-running { background: #a78bfa; border-radius: 4px; }
+QFrame#card-dot-done    { background: #22c55e; border-radius: 4px; }
+QFrame#card-dot-error   { background: #ef4444; border-radius: 4px; }
 
 QLabel#card-num {
     color: #334155;
@@ -292,10 +329,10 @@ QLabel#preview-meta {
 }
 
 QFrame#preview-announcement {
-    background: #1a1208;
-    border: 1px solid #2d1f08;
-    border-left: 3px solid #f59e0b;
-    border-radius: 0 6px 6px 0;
+    background: transparent;
+    border: none;
+    border-left: 2px solid #f59e0b;
+    border-radius: 0;
 }
 
 QLabel#preview-ann-header {
@@ -312,16 +349,17 @@ QLabel#preview-ann-text {
 }
 
 QLabel#preview-section-header {
-    color: #1e2a3a;
+    color: #334155;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1px;
 }
 
 QFrame#preview-chunk-card {
-    background: #111118;
-    border: 1px solid #1a1a2a;
-    border-radius: 8px;
+    background: transparent;
+    border: none;
+    border-left: 2px solid #1e1e2e;
+    border-radius: 0;
 }
 
 QLabel#chunk-badge {
@@ -341,6 +379,7 @@ QLabel#chunk-chars {
 QLabel#chunk-body {
     color: #64748b;
     font-size: 12px;
+    padding-left: 4px;
 }
 
 /* ── Log card ────────────────────────────────────────────────────── */
@@ -449,6 +488,170 @@ QPushButton#btn-generate:pressed {
     background: #5b21b6;
 }
 
+/* ── Edit chapter button (preview header) ────────────────────────── */
+QPushButton#btn-edit-chapter {
+    background: transparent;
+    border: 1px solid #2e2e3e;
+    border-radius: 5px;
+    padding: 3px 10px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+QPushButton#btn-edit-chapter:hover {
+    border-color: #7c3aed;
+    color: #a78bfa;
+}
+
+/* ── Chapter text editor ─────────────────────────────────────────── */
+QTextEdit#chapter-text-edit {
+    background: #111118;
+    border: 1px solid #2e3a5a;
+    border-radius: 6px;
+    padding: 10px;
+    color: #e2e8f0;
+    font-size: 13px;
+    selection-background-color: #7c3aed;
+}
+QTextEdit#chapter-text-edit:focus {
+    border-color: #7c3aed;
+}
+
+/* ── Edit mode action buttons ────────────────────────────────────── */
+QPushButton#btn-edit-save {
+    background: #1d4ed8;
+    border: 1px solid #2563eb;
+    border-radius: 6px;
+    padding: 5px 16px;
+    color: #eff6ff;
+    font-weight: 600;
+}
+QPushButton#btn-edit-save:hover { background: #2563eb; }
+
+QPushButton#btn-edit-cancel {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 5px 14px;
+    color: #94a3b8;
+}
+QPushButton#btn-edit-cancel:hover {
+    border-color: #7c3aed;
+    color: #e2e8f0;
+}
+
+/* ── Regenerate button on chapter card ───────────────────────────── */
+QPushButton#btn-regen {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 4px;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
+}
+QPushButton#btn-regen:hover {
+    background: #14532d;
+    border-color: #16a34a;
+    color: #22c55e;
+}
+QPushButton#btn-regen:disabled {
+    color: #2d3748;
+    border-color: #1e1e2e;
+}
+
+/* ── Settings dialog ─────────────────────────────────────────────── */
+QDialog {
+    background: #13131a;
+}
+
+QLineEdit#settings-input {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #e2e8f0;
+    selection-background-color: #7c3aed;
+}
+QLineEdit#settings-input:focus {
+    border-color: #7c3aed;
+}
+QLineEdit#settings-input:disabled {
+    color: #334155;
+    border-color: #1e1e2e;
+    background: #111118;
+}
+
+QComboBox {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #e2e8f0;
+}
+QComboBox:disabled {
+    color: #334155;
+    background: #111118;
+}
+QComboBox QAbstractItemView {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    color: #e2e8f0;
+    selection-background-color: #7c3aed;
+}
+QComboBox::drop-down { border: none; }
+
+QCheckBox {
+    color: #94a3b8;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #2e2e3e;
+    border-radius: 4px;
+    background: #1a1a24;
+}
+QCheckBox::indicator:checked {
+    background: #7c3aed;
+    border-color: #7c3aed;
+}
+
+QLabel#settings-hint {
+    color: #475569;
+    font-size: 11px;
+}
+
+QLabel#settings-section {
+    color: #7c3aed;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding-top: 18px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #2e2e3e;
+}
+
+QDialogButtonBox QPushButton {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 18px;
+    color: #94a3b8;
+    min-width: 70px;
+}
+QDialogButtonBox QPushButton:hover {
+    border-color: #7c3aed;
+    color: #e2e8f0;
+}
+QDialogButtonBox QPushButton[text="OK"] {
+    background: #1d4ed8;
+    border-color: #2563eb;
+    color: #eff6ff;
+    font-weight: 600;
+}
+QDialogButtonBox QPushButton[text="OK"]:hover {
+    background: #2563eb;
+}
+
 /* ── Scrollbars ──────────────────────────────────────────────────── */
 QScrollBar:vertical {
     background: transparent;
@@ -483,4 +686,162 @@ QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal     { width: 0; }
 QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal     { background: transparent; }
+
+/* ── Scrollable body ─────────────────────────────────────────────── */
+QWidget#scroll-body {
+    background: #0f0f13;
+}
+
+/* ── Info bar (top card row) ─────────────────────────────────────── */
+QFrame#info-bar {
+    background: transparent;
+}
+
+QFrame#info-card {
+    background: #13131a;
+    border: 1px solid #1e1e2e;
+    border-radius: 10px;
+}
+
+QLabel#info-card-title {
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+}
+
+QLabel#info-card-meta {
+    color: #64748b;
+    font-size: 11px;
+}
+
+/* ── Section containers (pipeline + chapter) ─────────────────────── */
+QFrame#pipeline-section,
+QFrame#chapter-section {
+    background: #13131a;
+    border: 1px solid #1e1e2e;
+    border-radius: 10px;
+}
+
+QFrame#section-header {
+    background: transparent;
+    border-radius: 10px;
+}
+
+QLabel#section-title {
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+}
+
+QPushButton#section-toggle-btn {
+    background: transparent;
+    border: 1px solid #2e2e3e;
+    border-radius: 4px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0;
+}
+QPushButton#section-toggle-btn:hover {
+    border-color: #7c3aed;
+    color: #a78bfa;
+}
+
+/* ── Settings adaptation toggle ──────────────────────────────────── */
+QPushButton#toggle-btn {
+    background: #1a1a24;
+    border: 1px solid #2e2e3e;
+    border-radius: 12px;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    min-width: 52px;
+    max-width: 52px;
+    padding: 4px 0;
+}
+QPushButton#toggle-btn:checked {
+    background: #6d28d9;
+    border-color: #7c3aed;
+    color: #ffffff;
+}
+QPushButton#toggle-btn:hover {
+    border-color: #7c3aed;
+}
+QPushButton#toggle-btn:checked:hover {
+    background: #7c3aed;
+}
+
+QWidget#section-content {
+    background: transparent;
+}
+
+/* ── Stage rows ──────────────────────────────────────────────────── */
+QFrame#stage-row {
+    background: transparent;
+}
+
+QFrame#stage-sep {
+    background: #1a1a24;
+}
+
+QLabel#stage-name {
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QLabel#stage-desc {
+    color: #334155;
+    font-size: 12px;
+}
+
+QLabel#stage-detail {
+    color: #64748b;
+    font-size: 11px;
+}
+
+/* Stage status icons */
+QFrame#stage-icon-pending { background: #2d3748; border-radius: 5px; }
+QFrame#stage-icon-running { background: #a78bfa; border-radius: 5px; }
+QFrame#stage-icon-done    { background: #22c55e; border-radius: 5px; }
+QFrame#stage-icon-error   { background: #ef4444; border-radius: 5px; }
+
+/* Stage state labels */
+QLabel#stage-state-pending { color: #2d3748; font-size: 11px; }
+QLabel#stage-state-running { color: #a78bfa; font-size: 11px; }
+QLabel#stage-state-done    { color: #22c55e; font-size: 11px; }
+QLabel#stage-state-error   { color: #ef4444; font-size: 11px; }
+
+/* ── Expandable chapter cards ────────────────────────────────────── */
+QFrame#exp-chapter-card {
+    background: #13131a;
+}
+
+QFrame#exp-card-header {
+    background: transparent;
+}
+
+QFrame#exp-card-header:hover {
+    background: #17171f;
+}
+
+QFrame#exp-card-header-active {
+    background: #160f2e;
+}
+
+QWidget#exp-card-content {
+    background: #0f0f13;
+}
+
+QLabel#exp-icon {
+    color: #334155;
+    font-size: 11px;
+}
+
+QFrame#card-sep {
+    background: #1a1a24;
+}
 """

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QScrollArea,
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QScrollArea, QPushButton,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
@@ -20,7 +20,8 @@ _DOT_OBJECT = {
 
 
 class _ChapterCard(QFrame):
-    clicked_sig = pyqtSignal(int, str)
+    clicked_sig   = pyqtSignal(int, str)
+    regen_clicked = pyqtSignal(int)
 
     def __init__(self, index: int, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -33,7 +34,7 @@ class _ChapterCard(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 14, 0)
+        root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(10)
 
         # 3-px left accent bar
@@ -42,11 +43,10 @@ class _ChapterCard(QFrame):
         self._accent.setStyleSheet(f"background:{_ACCENT_IDLE};")
         root.addWidget(self._accent)
 
-        # Status dot (coloured Unicode circle)
-        self._dot = QLabel("●")
+        # Status dot (coloured circle)
+        self._dot = QFrame()
         self._dot.setObjectName(_DOT_OBJECT["pending"])
-        self._dot.setFixedWidth(14)
-        self._dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._dot.setFixedSize(8, 8)
         root.addWidget(self._dot)
 
         # Chapter number badge
@@ -65,10 +65,20 @@ class _ChapterCard(QFrame):
 
         # Title
         display = title or f"Chapter {index}"
-        short = (display[:42] + "…") if len(display) > 43 else display
+        short = (display[:38] + "…") if len(display) > 39 else display
         self._title_lbl = QLabel(short)
         self._title_lbl.setObjectName("card-title")
         root.addWidget(self._title_lbl, stretch=1)
+
+        # Regenerate button (hidden until chapter is done/error)
+        self._regen_btn = QPushButton("⟳")
+        self._regen_btn.setObjectName("btn-regen")
+        self._regen_btn.setFixedSize(26, 26)
+        self._regen_btn.setToolTip("Regenerate this chapter")
+        self._regen_btn.setVisible(False)
+        self._regen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._regen_btn.clicked.connect(lambda: self.regen_clicked.emit(self._index))
+        root.addWidget(self._regen_btn)
 
     # ── Events ────────────────────────────────────────────────────────
 
@@ -100,13 +110,23 @@ class _ChapterCard(QFrame):
             self._num_lbl.setStyleSheet("")
 
     def set_state_running(self) -> None:
+        self._regen_btn.setVisible(False)
         self._apply_state(_ACCENT_RUNNING, "running")
 
     def set_state_done(self) -> None:
         self._apply_state(_ACCENT_DONE, "done")
+        self._regen_btn.setVisible(True)
 
     def set_state_error(self) -> None:
         self._apply_state(_ACCENT_ERROR, "error")
+        self._regen_btn.setVisible(True)
+
+    def set_state_pending(self) -> None:
+        self._regen_btn.setVisible(False)
+        self._apply_state(_ACCENT_IDLE, "pending")
+
+    def set_regen_enabled(self, enabled: bool) -> None:
+        self._regen_btn.setEnabled(enabled)
 
     # ── Internals ─────────────────────────────────────────────────────
 
@@ -118,7 +138,8 @@ class _ChapterCard(QFrame):
 
 
 class ChapterListPanel(QWidget):
-    chapter_selected = pyqtSignal(int, str)
+    chapter_selected       = pyqtSignal(int, str)
+    chapter_regen_requested = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -174,10 +195,7 @@ class ChapterListPanel(QWidget):
         self._selected = None
 
         for idx, title in chapters:
-            card = _ChapterCard(idx, title)
-            card.clicked_sig.connect(self._on_card_clicked)
-            self._cards[idx] = card
-            self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
+            self._add_card(idx, title)
 
         n = len(chapters)
         self._title_lbl.setText(f"Chapters  ·  {n}" if n else "Chapters")
@@ -186,10 +204,7 @@ class ChapterListPanel(QWidget):
         """Add chapters progressively (for streaming during structuring)."""
         for idx, title in chapters:
             if idx not in self._cards:
-                card = _ChapterCard(idx, title)
-                card.clicked_sig.connect(self._on_card_clicked)
-                self._cards[idx] = card
-                self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
+                self._add_card(idx, title)
 
         n = len(self._cards)
         self._title_lbl.setText(f"Chapters  ·  {n}" if n else "Chapters")
@@ -210,7 +225,22 @@ class ChapterListPanel(QWidget):
         if card := self._cards.get(chapter_idx):
             card.set_state_error()
 
+    def set_pending(self, chapter_idx: int) -> None:
+        if card := self._cards.get(chapter_idx):
+            card.set_state_pending()
+
+    def set_regen_enabled_all(self, enabled: bool) -> None:
+        for card in self._cards.values():
+            card.set_regen_enabled(enabled)
+
     # ── Internals ─────────────────────────────────────────────────────
+
+    def _add_card(self, idx: int, title: str) -> None:
+        card = _ChapterCard(idx, title)
+        card.clicked_sig.connect(self._on_card_clicked)
+        card.regen_clicked.connect(self.chapter_regen_requested)
+        self._cards[idx] = card
+        self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
 
     def _on_card_clicked(self, idx: int, title: str) -> None:
         if self._selected is not None:
@@ -220,4 +250,3 @@ class ChapterListPanel(QWidget):
         if card := self._cards.get(idx):
             card.set_selected(True)
         self.chapter_selected.emit(idx, title)
-

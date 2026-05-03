@@ -104,3 +104,18 @@ OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "./output"))
 TTS_CHUNK_SIZE: int = int(os.getenv("TTS_CHUNK_SIZE", "3000"))
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Audiobook Adaptation ──────────────────────────────────────────────────────
+# Set ADAPTATION_ENABLED=false to skip LLM adaptation and use raw extracted text.
+ADAPTATION_ENABLED: bool = os.getenv("ADAPTATION_ENABLED", "true").lower() == "true"
+
+# "ollama" uses the local Ollama server; "openrouter" uses the cloud API.
+ADAPTATION_PROVIDER: str = os.getenv("ADAPTATION_PROVIDER", "ollama")  # "ollama"|"openrouter"
+
+# Ollama adaptation model — can be smaller/faster than the structuring model.
+ADAPTATION_MODEL: str = os.getenv("ADAPTATION_MODEL", LLM_MODEL)
+
+# OpenRouter settings — only needed when ADAPTATION_PROVIDER=openrouter.
+# Recommended cost-efficient model: anthropic/claude-haiku-4-5
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL:   str = os.getenv("OPENROUTER_MODEL",   "anthropic/claude-haiku-4-5")
