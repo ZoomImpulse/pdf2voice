@@ -191,10 +191,7 @@ def _estimate_tokens(text: str) -> int:
 
 _ANCHOR_SAMPLE_TEXT = (
     "Welcome to this audiobook. I will be your narrator throughout this journey. "
-    "Together we will travel through pages filled with ideas, images, and voices "
-    "that I hope will stay with you long after the final chapter. "
-    "Settle in, find a comfortable place, "
-    "and let the story begin."
+    "Settle in, find a comfortable place, and let the story begin."
 )
 
 

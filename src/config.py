@@ -253,76 +253,43 @@ VOICE_ANCHORS_DIR.mkdir(parents=True, exist_ok=True)
 GENRE_SAMPLE_TEXTS: dict[str, str] = {
     "novel": (
         "She stood at the edge of the forest, the lantern swinging in her hand. "
-        "Something moved between the trees — a shadow that breathed, that waited. "
-        "She told herself it was the wind, or a deer, or nothing at all. "
-        "But her feet had already stopped moving, and the lantern flame had gone very still, "
-        "as if the air itself was holding its breath along with her."
+        "Something moved between the trees — a shadow that breathed, that waited."
     ),
     "thriller": (
-        "The call came at 2 a.m. Three words, then silence. "
-        "He was already reaching for his coat before the line went dead. "
-        "Twelve years on the job had taught him that silence after three words "
-        "was never just silence — it was a door left open, "
-        "and something on the other side was already walking through."
+        "The call came at 2 a.m. — three words, then silence. "
+        "He was already reaching for his coat before the line went dead."
     ),
     "nonfiction": (
         "The evidence, examined carefully, points in only one direction. "
-        "What we assumed to be settled science turns out to be a working hypothesis, "
-        "revised every decade by the very researchers who proposed it. "
-        "This is not a failure of knowledge — it is knowledge doing exactly what it should: "
-        "correcting itself, slowly and honestly, in the direction of truth."
+        "What we assumed to be settled science turns out to be a working hypothesis."
     ),
     "biography": (
         "She never spoke about those years — not to her children, not to the journalists "
-        "who came later with their recorders and their careful questions. "
-        "But the letters she kept, folded in a tin box under her bed, told a different story. "
-        "A story of choices made under pressure, of loyalties tested, "
-        "and of a life that was far larger, and far stranger, than anyone around her ever knew."
+        "who came later with their recorders and their careful questions."
     ),
     "selfhelp": (
         "Change begins not with grand gestures but with a single decision made quietly, "
-        "before anyone is watching. "
-        "You already know what that decision is. You have known for some time. "
-        "The only question left is whether today is the day you stop waiting "
-        "for the right moment and accept that the moment you are in right now is the only one available."
+        "before anyone is watching."
     ),
     "philosophy": (
         "To ask what is real is to ask what we mean by asking. "
-        "Every answer shapes the question that comes after it, "
-        "and the shape of the question determines what we are able to find. "
-        "Philosophy does not solve problems so much as reveal the assumptions "
-        "hidden inside them — and sometimes, that is the more difficult and more necessary work."
+        "Every answer shapes the question that comes after it."
     ),
     "technical": (
         "A hash collision occurs when two distinct inputs produce the same output value. "
-        "In SHA-256, the probability of a collision is approximately two to the power of negative 128 — "
-        "negligible for all practical purposes, but not zero. "
-        "Understanding why that distinction matters is the foundation of modern cryptographic design, "
-        "and the reason we do not treat negligible and impossible as the same thing."
+        "Understanding why that matters is the foundation of modern cryptographic design."
     ),
     "history": (
-        "On the morning of the fourteenth of July, 1789, a crowd gathered outside "
-        "the Bastille — not yet an army, not yet a revolution, but something between "
-        "the two that the old order had no name for. "
-        "By afternoon, the name would come. "
-        "By evening, the world those people had been born into would already be ending, "
-        "though most of them would not understand that until much later."
+        "On the morning of the fourteenth of July, 1789, a crowd gathered outside the Bastille — "
+        "not yet an army, not yet a revolution, but something the old order had no name for."
     ),
     "children": (
         "The little fox had never seen snow before. "
-        "She pressed her nose against it and sneezed loudly, then looked around to see if anyone had noticed. "
-        "The rabbit had. He was already laughing. "
-        "'It tickles,' she said, very seriously. "
-        "'Everything tickles the first time,' said the rabbit, "
-        "and somehow that made her feel much better about the whole situation."
+        "She pressed her nose against it and sneezed loudly, then looked around to see if anyone had noticed."
     ),
     "poetry": (
         "I have been here before — in the hinge of a door, "
-        "in the pause between one breath and the next. "
-        "The world does not wait. Neither do I. "
-        "There is a kind of courage in simply continuing, "
-        "in placing one word after another when the silence is so wide "
-        "it seems to ask you to stop."
+        "in the pause between one breath and the next."
     ),
 }
 

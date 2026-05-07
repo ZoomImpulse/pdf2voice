@@ -670,6 +670,8 @@ class VoiceDesignWorker(QThread):
                 progress_cb=self.progress.emit,
                 cancelled=lambda: self._cancelled,
             )
+            if path is not None:
+                self.finished_ok.emit(path)
         except Exception as exc:
             self.failed.emit(str(exc))
 
