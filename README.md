@@ -49,7 +49,7 @@ ollama pull qwen3:8b
 
 ### fish_speech_cpp (default)
 
-Uses the [s2.cpp](https://github.com/fishaudio/s2.cpp) native binary with a GGUF-quantised Fish Speech S2 Pro model. Faster inference via Vulkan GPU acceleration.
+Uses the [s2.cpp](https://github.com/fishaudio/s2.cpp) native binary with the pre-quantised Fish Speech S2 Pro GGUF model (`s2-pro-q8_0.gguf`, downloaded from [`fishaudio/s2-pro-gguf`](https://huggingface.co/fishaudio/s2-pro-gguf)). Faster inference via Vulkan GPU acceleration.
 
 **Setup:**
 1. Build `s2.cpp` and point `FISH_SPEECH_CPP_EXE` to the resulting `s2.exe`

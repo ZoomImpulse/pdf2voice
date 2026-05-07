@@ -35,7 +35,7 @@ TTS_CLONE_MODEL: str = os.getenv(
 FISH_SPEECH_CPP_EXE: str = os.getenv(
     "FISH_SPEECH_CPP_EXE", str(Path("D:/GIT/s2.cpp/build/Release/s2.exe"))
 )
-# Path to the GGUF model file (q8_0 = 5.6 GB, good quality/speed balance).
+# Path to the pre-quantised GGUF model file (q8_0, ~5.6 GB — from fishaudio/s2-pro-gguf on HF).
 FISH_SPEECH_CPP_MODEL: str = os.getenv(
     "FISH_SPEECH_CPP_MODEL", str(Path("D:/GIT/s2.cpp/checkpoints/s2-pro-gguf/s2-pro-q8_0.gguf"))
 )
