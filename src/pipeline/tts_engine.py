@@ -229,7 +229,11 @@ def generate_audiobook(
     # never generates one inline.
     genre_anchor: Path | None = None
     if book.genre and book.genre in GENRE_PROMPTS:
-        candidate = VOICE_ANCHORS_DIR / f"anchor_{book.genre}.wav"
+        lang_code = (book.language or "en").lower().strip()
+        candidate = VOICE_ANCHORS_DIR / f"anchor_{book.genre}_{lang_code}.wav"
+        if not candidate.is_file():
+            # Legacy: anchors without a language suffix (all treated as English)
+            candidate = VOICE_ANCHORS_DIR / f"anchor_{book.genre}.wav"
         if candidate.is_file():
             genre_anchor = candidate
 
@@ -450,8 +454,9 @@ def generate_genre_voice_anchor(
     Writes VOICE_ANCHORS_DIR/anchor_{genre}.wav  (+ .txt sidecar).
     Returns the WAV path, or None on failure/cancellation.
     """
-    lang     = _resolve_language(language)
-    if lang == "de":
+    lang_code = (language or "en").lower().strip()   # "de", "en" — used for filenames
+    lang_name = _resolve_language(lang_code)          # "german", "english" — used for TTS model
+    if lang_code == "de":
         sample = GENRE_SAMPLE_TEXTS_DE.get(genre, _ANCHOR_SAMPLE_TEXT_DE)
     else:
         sample = GENRE_SAMPLE_TEXTS.get(genre, _ANCHOR_SAMPLE_TEXT)
@@ -482,7 +487,7 @@ def generate_genre_voice_anchor(
     wavs, sr = tts.generate_voice_design(
         text=sample,
         instruct=instruct,
-        language=lang,
+        language=lang_name,
         streamer=streamer,
     )
 
@@ -491,8 +496,8 @@ def generate_genre_voice_anchor(
     if progress_cb:
         progress_cb(80.0)
 
-    output_path = VOICE_ANCHORS_DIR / f"anchor_{genre}.wav"
-    txt_path    = VOICE_ANCHORS_DIR / f"anchor_{genre}.txt"
+    output_path = VOICE_ANCHORS_DIR / f"anchor_{genre}_{lang_code}.wav"
+    txt_path    = VOICE_ANCHORS_DIR / f"anchor_{genre}_{lang_code}.txt"
 
     sf.write(str(output_path), wavs[0], sr)
     txt_path.write_text(sample, encoding="utf-8")

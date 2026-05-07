@@ -134,6 +134,7 @@ class PipelineWorker(QThread):
         if resuming and existing:
             # ── RESUME path ────────────────────────────────────────────
             session = existing
+            self._session_ref = session   # expose early so get_session() works during await
             book    = book_from_session(session)
             done    = session.completed_count
             total   = len(session.chapters)
@@ -327,6 +328,7 @@ class PipelineWorker(QThread):
             # Create session now so adaptation progress can be persisted incrementally
             session = create_session(book, pdf_hash, pdf_path, gender)
             session.save()
+            self._session_ref = session   # expose early so get_session() works during await
             self.log_info.emit("Session saved — generation can be resumed if interrupted.")
 
             if ADAPTATION_ENABLED:

@@ -730,6 +730,8 @@ class Pdf2VoiceApp(QMainWindow):
     @pyqtSlot()
     def _on_awaiting_confirm(self) -> None:
         self._app_state = "awaiting"
+        if self._worker:
+            self._session = self._worker.get_session()
         if self._book:
             self._genre_combo.blockSignals(True)
             idx = self._genre_combo.findText(self._book.genre)
@@ -776,8 +778,10 @@ class Pdf2VoiceApp(QMainWindow):
 
     def _confirm_tts(self) -> None:
         genre = getattr(self._book, "genre", "") if self._book else ""
-        genre_anchor = VOICE_ANCHORS_DIR / f"anchor_{genre}.wav" if genre else None
+        lang  = getattr(self._book, "language", "en") if self._book else "en"
         session = self._worker.get_session() if self._worker else None
+
+        genre_anchor = self._resolve_genre_anchor(genre, lang)
 
         has_anchor = (
             (session is not None and session.anchor_available())
@@ -789,11 +793,11 @@ class Pdf2VoiceApp(QMainWindow):
                 f"No saved voice for genre '{genre or 'unknown'}' — "
                 "please design one in the Voice Designer first."
             )
-            lang = getattr(self._book, "language", "en") if self._book else "en"
             dlg = VoiceDesignerDialog(initial_genre=genre, initial_language=lang, parent=self)
             dlg.exec()
 
             # Re-check after the dialog closes
+            genre_anchor = self._resolve_genre_anchor(genre, lang)
             if genre_anchor is None or not genre_anchor.is_file():
                 self._log_panel.warn("Voice not saved — save a voice to continue.")
                 return
@@ -835,6 +839,17 @@ class Pdf2VoiceApp(QMainWindow):
         self._status_lbl.setText("Cancelled")
 
     # ── Helper ────────────────────────────────────────────────────────────────
+
+    def _resolve_genre_anchor(self, genre: str, language: str) -> "Path | None":
+        """Return the best available anchor WAV for genre+language, or None."""
+        if not genre:
+            return None
+        lang_code = (language or "en").lower().strip()
+        lang_specific = VOICE_ANCHORS_DIR / f"anchor_{genre}_{lang_code}.wav"
+        if lang_specific.is_file():
+            return lang_specific
+        legacy = VOICE_ANCHORS_DIR / f"anchor_{genre}.wav"
+        return legacy  # caller checks .is_file()
 
     def _set_controls(self, state: str) -> None:
         """state: 'idle' | 'awaiting' | 'running'"""

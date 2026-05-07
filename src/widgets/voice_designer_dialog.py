@@ -36,6 +36,11 @@ _GREY_DOT  = "○"
 
 _GENRES: list[str] = list(GENRE_PROMPTS.keys())
 
+_LANGUAGE_OPTIONS: list[tuple[str, str]] = [
+    ("en", "EN — English"),
+    ("de", "DE — Deutsch"),
+]
+
 _GENDER_OPTIONS: list[str] = ["Female", "Male", "Neutral"]
 _AGE_OPTIONS:    list[str] = ["Child", "Teen", "Young Adult", "Adult", "Middle-aged", "Senior"]
 
@@ -132,10 +137,34 @@ class VoiceDesignerDialog(QDialog):
         outer.setContentsMargins(24, 20, 24, 16)
         outer.setSpacing(10)
 
-        # Genre title
+        # Genre title + language selector
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+
         self._title_lbl = QLabel("")
         self._title_lbl.setObjectName("vd-genre-title")
-        outer.addWidget(self._title_lbl)
+        title_row.addWidget(self._title_lbl, stretch=1)
+
+        lang_lbl = QLabel("Language:")
+        lang_lbl.setObjectName("vd-spec-label")
+        title_row.addWidget(lang_lbl)
+
+        self._lang_combo = QComboBox()
+        self._lang_combo.setObjectName("genre-combo")
+        self._lang_combo.setFixedHeight(30)
+        self._lang_combo.setMinimumWidth(130)
+        for code, label in _LANGUAGE_OPTIONS:
+            self._lang_combo.addItem(label, userData=code)
+        # Pre-select the language passed to the constructor
+        init_idx = next(
+            (i for i, (c, _) in enumerate(_LANGUAGE_OPTIONS) if c == self._language), 0
+        )
+        self._lang_combo.setCurrentIndex(init_idx)
+        self._lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        title_row.addWidget(self._lang_combo)
+
+        outer.addLayout(title_row)
 
         # AI Fill row
         ai_row = QHBoxLayout()
@@ -241,11 +270,6 @@ class VoiceDesignerDialog(QDialog):
         self._replay_btn.clicked.connect(self._on_replay_clicked)
         btn_row.addWidget(self._replay_btn)
 
-        self._play_sample_btn = QPushButton("▶  Play Sample")
-        self._play_sample_btn.setObjectName("vd-play-sample-btn")
-        self._play_sample_btn.setEnabled(False)
-        self._play_sample_btn.clicked.connect(self._on_play_sample_clicked)
-        btn_row.addWidget(self._play_sample_btn)
 
         self._use_btn = QPushButton("Use This Voice")
         self._use_btn.setObjectName("vd-use-btn")
@@ -285,7 +309,7 @@ class VoiceDesignerDialog(QDialog):
         self._replay_btn.setEnabled(False)
         self._use_btn.setEnabled(False)
         self._reset_btn.setEnabled(has_anchor)
-        self._play_sample_btn.setEnabled(has_anchor)
+
         self._preview_path = None
 
     def _save_spec_fields(self, genre: str) -> None:
@@ -355,6 +379,11 @@ class VoiceDesignerDialog(QDialog):
                     widget.setCurrentText(str(value))
             else:
                 widget.setText(str(value))  # type: ignore[union-attr]
+
+        # Persist the filled values immediately so a genre/language switch doesn't discard them
+        genre = self._current_genre()
+        if genre:
+            self._save_spec_fields(genre)
 
         self._progress_bar.setRange(0, 100)
         self._progress_bar.hide()
@@ -453,15 +482,6 @@ class VoiceDesignerDialog(QDialog):
             self._play_wav(self._preview_path)
 
     @pyqtSlot()
-    def _on_play_sample_clicked(self) -> None:
-        genre = self._current_genre()
-        if genre is None:
-            return
-        anchor = self._anchor_path_for(genre)
-        if anchor.is_file():
-            self._play_wav(anchor)
-
-    @pyqtSlot()
     def _on_use_this_voice_clicked(self) -> None:
         genre = self._current_genre()
         if genre is None:
@@ -513,10 +533,35 @@ class VoiceDesignerDialog(QDialog):
         self._log_lbl.setText("")
         self._log_lbl.show()
 
+    # ── Language selection ────────────────────────────────────────────────────
+
+    @pyqtSlot(int)
+    def _on_language_changed(self, index: int) -> None:
+        self._language = self._lang_combo.itemData(index) or "en"
+        # Refresh dots (existing anchors are language-specific)
+        self._refresh_genre_list()
+        # Update status and buttons for the current genre
+        genre = self._current_genre()
+        if genre:
+            has_anchor = self._anchor_path_for(genre).is_file()
+            self._update_status(genre, has_anchor)
+            self._replay_btn.setEnabled(False)
+            self._use_btn.setEnabled(False)
+            self._reset_btn.setEnabled(has_anchor)
+    
+            self._preview_path = None
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _anchor_path_for(self, genre: str) -> Path:
-        return VOICE_ANCHORS_DIR / f"anchor_{genre}.wav"
+        lang = self._language or "en"
+        path = VOICE_ANCHORS_DIR / f"anchor_{genre}_{lang}.wav"
+        if not path.is_file() and lang == "en":
+            # Legacy: anchors generated before language suffixes were introduced
+            legacy = VOICE_ANCHORS_DIR / f"anchor_{genre}.wav"
+            if legacy.is_file():
+                return legacy
+        return path
 
     def _current_genre(self) -> str | None:
         row = self._genre_list.currentRow()
