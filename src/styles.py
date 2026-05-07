@@ -614,6 +614,26 @@ QComboBox QAbstractItemView {
 }
 QComboBox::drop-down { border: none; }
 
+QComboBox#genre-combo {
+    background: #1a0000;
+    border: 1px solid #dc2626;
+    border-radius: 5px;
+    padding: 4px 8px;
+    color: #f87171;
+    font-size: 12px;
+    font-weight: 600;
+}
+QComboBox#genre-combo:hover {
+    background: #250000;
+}
+QComboBox#genre-combo QAbstractItemView {
+    background: #0f0000;
+    border: 1px solid #dc2626;
+    color: #fca5a5;
+    selection-background-color: #dc2626;
+    selection-color: #ffffff;
+}
+
 QCheckBox {
     color: #fca5a5;
     spacing: 8px;

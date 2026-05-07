@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,7 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.config import OUTPUT_DIR, VOICE_ANCHORS_DIR
+from src.config import GENRE_PROMPTS, OUTPUT_DIR, VOICE_ANCHORS_DIR
 from src.styles import DARK_STYLESHEET
 from src.widgets.chapter_section import ChapterSection
 from src.widgets.info_bar import InfoBar
@@ -160,6 +161,18 @@ class Pdf2VoiceApp(QMainWindow):
         self._confirm_msg.setObjectName("confirm-bar-msg")
         self._confirm_msg.setWordWrap(True)
         layout.addWidget(self._confirm_msg, stretch=1)
+
+        genre_lbl = QLabel("Genre:")
+        genre_lbl.setObjectName("confirm-bar-msg")
+        layout.addWidget(genre_lbl)
+
+        self._genre_combo = QComboBox()
+        self._genre_combo.setObjectName("genre-combo")
+        self._genre_combo.addItems(list(GENRE_PROMPTS.keys()))
+        self._genre_combo.setFixedHeight(30)
+        self._genre_combo.setMinimumWidth(120)
+        self._genre_combo.currentTextChanged.connect(self._on_genre_changed)
+        layout.addWidget(self._genre_combo)
 
         btn = QPushButton("▶▶  Generate Audio")
         btn.setObjectName("btn-generate")
@@ -634,10 +647,25 @@ class Pdf2VoiceApp(QMainWindow):
     @pyqtSlot()
     def _on_awaiting_confirm(self) -> None:
         self._app_state = "awaiting"
+        if self._book:
+            self._genre_combo.blockSignals(True)
+            idx = self._genre_combo.findText(self._book.genre)
+            if idx >= 0:
+                self._genre_combo.setCurrentIndex(idx)
+            self._genre_combo.blockSignals(False)
         self._confirm_bar.setVisible(True)
         self._set_controls("awaiting")
         self._chapter_section.set_edit_allowed(True)
         self._status_lbl.setText("Review chapters …")
+
+    def _on_genre_changed(self, genre: str) -> None:
+        if not genre or self._book is None:
+            return
+        self._book.genre = genre
+        if self._session:
+            self._session.genre = genre
+            self._session.save()
+        self._log_panel.info(f"Genre geändert zu: {genre}")
 
     @pyqtSlot(list, object)
     def _on_all_done(self, output_paths: list, final_path) -> None:
