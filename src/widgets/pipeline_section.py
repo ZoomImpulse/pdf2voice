@@ -15,14 +15,12 @@ from PyQt6.QtWidgets import (
 _STAGE_NAMES: dict[int, str] = {
     0: "Extraction",
     1: "Structuring",
-    2: "Voice Design",
-    3: "Generation",
+    2: "Generation",
 }
 _STAGE_DESCS: dict[int, str] = {
     0: "PDF → Markdown",
     1: "AI chapter detection",
-    2: "Voice anchor synthesis",
-    3: "Speech synthesis",
+    2: "Speech synthesis",
 }
 
 
@@ -256,6 +254,11 @@ class PipelineSection(QFrame):
         self._overall_lbl.setText(text)
         if row := self._stages.get(self._current_stage):
             row.set_detail(text)
+
+    def set_chunk_step(self, step: int, total: int) -> None:
+        if total > 0:
+            if row := self._stages.get(self._current_stage):
+                row.set_progress(step + 1, total)
 
     def reset_all(self) -> None:
         self._current_stage = -1

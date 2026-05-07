@@ -199,21 +199,69 @@ def book_from_session(session: BookSession):
 # ── Internal ──────────────────────────────────────────────────────────────────
 
 def chunk_temp_path(pdf_hash: str, chapter_index: int, chunk_idx: int) -> Path:
-    """Return the temp .wav path for a single content chunk."""
-    from src.config import OUTPUT_DIR
-    return OUTPUT_DIR / f".tmp_{pdf_hash}_ch{chapter_index:02d}_{chunk_idx:04d}.wav"
+    """Return the temp .wav path for one chunk.
+
+    chunk_idx < 0  → title announcement  (filename: ch<N>_title.wav)
+    chunk_idx >= 0 → content chunk       (filename: ch<N>_<idx:04d>.wav)
+
+    Files live in TEMP_DIR/<pdf_hash>/ so each session is isolated.
+    The folder is created on first call.
+    """
+    from src.config import TEMP_DIR
+    folder = TEMP_DIR / pdf_hash
+    folder.mkdir(parents=True, exist_ok=True)
+    name = "title" if chunk_idx < 0 else f"{chunk_idx:04d}"
+    return folder / f"ch{chapter_index:02d}_{name}.wav"
+
+
+def cleanup_chapter_temps(pdf_hash: str, chapter_index: int, chunk_count: int) -> None:
+    """Delete all temp WAV files for one chapter (title + all content chunks)."""
+    chunk_temp_path(pdf_hash, chapter_index, -1).unlink(missing_ok=True)
+    for i in range(chunk_count):
+        chunk_temp_path(pdf_hash, chapter_index, i).unlink(missing_ok=True)
+
+
+def cleanup_session_temps(pdf_hash: str) -> None:
+    """Delete the entire temp subfolder for a completed session."""
+    import shutil
+    from src.config import TEMP_DIR
+    folder = TEMP_DIR / pdf_hash
+    if folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _session_path(pdf_hash_str: str) -> Path:
+    from src.config import SESSIONS_DIR
+    return SESSIONS_DIR / f".session_{pdf_hash_str}.json"
+
+
+def _legacy_session_path(pdf_hash_str: str) -> Path:
+    """Old session location (OUTPUT_DIR root) — used only for migration."""
     from src.config import OUTPUT_DIR
     return OUTPUT_DIR / f".session_{pdf_hash_str}.json"
 
 
 def list_incomplete() -> list[BookSession]:
-    """Return all saved sessions that are not yet fully complete."""
-    from src.config import OUTPUT_DIR
+    """Return all saved sessions that are not yet fully complete.
+
+    Also migrates any session files still in the legacy OUTPUT_DIR location
+    to the current SESSIONS_DIR.
+    """
+    from src.config import OUTPUT_DIR, SESSIONS_DIR
+
+    # Migrate legacy session files from OUTPUT_DIR root → SESSIONS_DIR
+    for old_path in OUTPUT_DIR.glob(".session_*.json"):
+        new_path = SESSIONS_DIR / old_path.name
+        if not new_path.exists():
+            try:
+                old_path.rename(new_path)
+            except Exception:
+                pass
+        else:
+            old_path.unlink(missing_ok=True)
+
     sessions: list[BookSession] = []
-    for path in sorted(OUTPUT_DIR.glob(".session_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(SESSIONS_DIR.glob(".session_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         pdf_hash = path.stem[len(".session_"):]
         session = BookSession.load(pdf_hash)
         if session is not None and not session.is_complete:

@@ -8,14 +8,12 @@ from PyQt6.QtCore import Qt, QTimer
 _STAGE_RUNNING: dict[int, str] = {
     0: "Extracting PDF …",
     1: "Structuring with AI …",
-    2: "Preparing voice …",
-    3: "Generating speech …",
+    2: "Generating speech …",
 }
 _STAGE_DONE: dict[int, str] = {
     0: "PDF extracted",
     1: "Structuring done",
-    2: "Voice ready",
-    3: "All done",
+    2: "All done",
 }
 _SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 
@@ -103,6 +101,13 @@ class PipelinePanel(QWidget):
     def set_status(self, text: str) -> None:
         """Override the current stage label with a custom message (e.g. per-chapter progress)."""
         self._status_lbl.setText(text)
+
+    def set_chunk_step(self, step: int, total: int) -> None:
+        """Show fine-grained token-step progress within the current chunk."""
+        if total > 0:
+            self._bar.setRange(0, total)
+            self._bar.setValue(step + 1)
+            self._bar.setVisible(True)
 
     def reset_all(self) -> None:
         self._stop_spinner()

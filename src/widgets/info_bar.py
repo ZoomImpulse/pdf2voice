@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.config import LLM_MODEL, OUTPUT_DIR, TTS_BASE_MODEL, TTS_DESIGN_MODEL
+from src.config import LLM_MODEL, OUTPUT_DIR, TTS_DESIGN_MODEL
 
 
 class InfoBar(QFrame):
@@ -29,7 +29,6 @@ class InfoBar(QFrame):
         layout.setSpacing(12)
 
         layout.addWidget(self._make_pdf_card(initial_path), stretch=3)
-        layout.addWidget(self._make_voice_card(), stretch=1)
         layout.addWidget(self._make_config_card(), stretch=2)
 
     # ── Card builders ─────────────────────────────────────────────────
@@ -63,56 +62,6 @@ class InfoBar(QFrame):
 
         return card
 
-    def _make_voice_card(self) -> QFrame:
-        card = QFrame()
-        card.setObjectName("info-card")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
-
-        title = QLabel("🎙  VOICE")
-        title.setObjectName("info-card-title")
-        layout.addWidget(title)
-
-        # Segmented pill toggle
-        toggle_row = QHBoxLayout()
-        toggle_row.setSpacing(0)
-        toggle_row.setContentsMargins(0, 0, 0, 0)
-
-        self._btn_female = QPushButton("♀  Female")
-        self._btn_female.setObjectName("voice-pill-left")
-        self._btn_female.setCheckable(True)
-        self._btn_female.setFixedHeight(34)
-        self._btn_female.clicked.connect(lambda: self._select_gender("female"))
-
-        self._btn_male = QPushButton("♂  Male")
-        self._btn_male.setObjectName("voice-pill-right")
-        self._btn_male.setCheckable(True)
-        self._btn_male.setFixedHeight(34)
-        self._btn_male.clicked.connect(lambda: self._select_gender("male"))
-
-        # No default — user must choose
-
-        toggle_row.addWidget(self._btn_female)
-        toggle_row.addWidget(self._btn_male)
-        layout.addLayout(toggle_row)
-        layout.addStretch()
-
-        return card
-
-    def _select_gender(self, gender: str) -> None:
-        self._btn_female.setChecked(gender == "female")
-        self._btn_male.setChecked(gender == "male")
-        self._btn_female.setObjectName(
-            "voice-pill-left-active" if gender == "female" else "voice-pill-left"
-        )
-        self._btn_male.setObjectName(
-            "voice-pill-right-active" if gender == "male" else "voice-pill-right"
-        )
-        for btn in (self._btn_female, self._btn_male):
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-
     def _make_config_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("info-card")
@@ -125,11 +74,9 @@ class InfoBar(QFrame):
         layout.addWidget(title)
 
         design_short = TTS_DESIGN_MODEL.split("/")[-1]
-        base_short   = TTS_BASE_MODEL.split("/")[-1]
         for key, val in [
             ("LLM",    LLM_MODEL),
-            ("Anchor", design_short),
-            ("Base",   base_short),
+            ("Design", design_short),
             ("Output", str(OUTPUT_DIR)),
         ]:
             row = QHBoxLayout()
@@ -164,16 +111,6 @@ class InfoBar(QFrame):
     def set_pdf_path(self, path: str) -> None:
         self._path_edit.setText(path)
 
-    def get_gender(self) -> str:
-        if self._btn_female.isChecked():
-            return "female"
-        if self._btn_male.isChecked():
-            return "male"
-        return ""
-
-    def set_gender(self, gender: str) -> None:
-        self._select_gender(gender)
-
     def set_pdf_info(self, info: str) -> None:
         if info:
             self._pdf_info_lbl.setText(info)
@@ -183,5 +120,3 @@ class InfoBar(QFrame):
 
     def set_controls_enabled(self, enabled: bool) -> None:
         self._browse_btn.setEnabled(enabled)
-        self._btn_female.setEnabled(enabled)
-        self._btn_male.setEnabled(enabled)

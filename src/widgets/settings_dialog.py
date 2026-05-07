@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,6 +18,30 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+_S2PRO_REPO   = "fishaudio/s2-pro-gguf"
+_S2PRO_FILES  = ["tokenizer.json", "s2-pro-q8_0.gguf"]
+_S2PRO_LOCAL  = Path("checkpoints/s2-pro-gguf")
+
+
+class _S2ProDownloader(QThread):
+    status_msg = pyqtSignal(str)
+    finished   = pyqtSignal(bool, str)   # success, message
+
+    def __init__(self, dest: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._dest = dest
+
+    def run(self) -> None:
+        try:
+            from huggingface_hub import hf_hub_download
+            self._dest.mkdir(parents=True, exist_ok=True)
+            for fname in _S2PRO_FILES:
+                self.status_msg.emit(f"Downloading {fname}…")
+                hf_hub_download(_S2PRO_REPO, fname, local_dir=str(self._dest))
+            self.finished.emit(True, "S2 Pro checkpoint downloaded.")
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
 
 
 class SettingsDialog(QDialog):
@@ -59,11 +83,37 @@ class SettingsDialog(QDialog):
 
         # ── TTS ───────────────────────────────────────────────────────
         form.addRow(self._section_header("Text-to-Speech"))
+        self._tts_backend = QComboBox()
+        self._tts_backend.addItems(["fish_speech_cpp", "qwen_tts_clone"])
+        self._tts_backend.setCurrentText(cfg.TTS_BACKEND)
+        self._tts_backend.currentTextChanged.connect(self._update_visibility)
+        form.addRow("TTS backend:", self._tts_backend)
+
+        # S2 Pro checkpoint status + download (fish_speech_cpp only)
+        self._s2pro_row_widget = QWidget()
+        _hl = QHBoxLayout(self._s2pro_row_widget)
+        _hl.setContentsMargins(0, 0, 0, 0)
+        _hl.setSpacing(6)
+        self._s2pro_status = QLabel()
+        self._s2pro_status.setObjectName("settings-hint")
+        _hl.addWidget(self._s2pro_status, stretch=1)
+        self._s2pro_btn = QPushButton("Download (~5.6 GB)")
+        self._s2pro_btn.setObjectName("browse-btn")
+        self._s2pro_btn.clicked.connect(self._start_s2pro_download)
+        _hl.addWidget(self._s2pro_btn)
+        form.addRow("S2 Pro checkpoint:", self._s2pro_row_widget)
+        self._refresh_s2pro_status()
+        self._s2pro_worker: _S2ProDownloader | None = None
+
         self._tts_device = QComboBox()
         self._tts_device.addItems(["cuda", "cpu"])
-        current_device = cfg.TTS_DEVICE if cfg.TTS_DEVICE in ["cuda", "cpu"] else "cuda"
-        self._tts_device.setCurrentText(current_device)
-        form.addRow("Device:", self._tts_device)
+        self._tts_device.setCurrentText(cfg.TTS_DEVICE if cfg.TTS_DEVICE in ["cuda", "cpu"] else "cuda")
+        form.addRow("Device (VoiceDesign):", self._tts_device)
+        self._tts_clone_model = self._line(
+            form, "Clone model:",
+            getattr(cfg, "TTS_CLONE_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base"),
+            "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        )
         self._tts_chunk  = self._line(form, "Chunk size (chars):", str(cfg.TTS_CHUNK_SIZE), "3000")
         seed_val = str(cfg.TTS_SEED) if getattr(cfg, "TTS_SEED", None) is not None else ""
         self._tts_seed   = self._line(form, "Seed (blank = auto):", seed_val, "")
@@ -209,6 +259,10 @@ class SettingsDialog(QDialog):
         self._set_row_visible(self._llm_ctx,    enabled and is_ollama)
         self._set_row_visible(self._or_key,     enabled and not is_ollama)
         self._set_row_visible(self._or_model,   enabled and not is_ollama)
+        is_clone    = self._tts_backend.currentText() == "qwen_tts_clone"
+        is_fish_cpp = self._tts_backend.currentText() == "fish_speech_cpp"
+        self._set_row_visible(self._tts_clone_model,   is_clone)
+        self._set_row_visible(self._s2pro_row_widget,  is_fish_cpp)
 
     def _set_row_visible(self, field: QWidget, visible: bool) -> None:
         """Show or hide a form row (label + field) by field widget."""
@@ -216,6 +270,43 @@ class SettingsDialog(QDialog):
         lbl = self._form.labelForField(field)
         if lbl:
             lbl.setVisible(visible)
+
+    def _refresh_s2pro_status(self) -> None:
+        gguf = _S2PRO_LOCAL / "s2-pro-q8_0.gguf"
+        tok  = _S2PRO_LOCAL / "tokenizer.json"
+        if gguf.exists() and tok.exists():
+            self._s2pro_status.setText("Present")
+            self._s2pro_status.setStyleSheet("color: #4caf50;")
+            self._s2pro_btn.setText("Re-download")
+        else:
+            self._s2pro_status.setText("Missing")
+            self._s2pro_status.setStyleSheet("color: #ff9800;")
+            self._s2pro_btn.setText("Download (~5.6 GB)")
+
+    def _start_s2pro_download(self) -> None:
+        if self._s2pro_worker and self._s2pro_worker.isRunning():
+            return
+        self._s2pro_btn.setEnabled(False)
+        self._s2pro_status.setStyleSheet("")
+        self._s2pro_worker = _S2ProDownloader(_S2PRO_LOCAL, self)
+        self._s2pro_worker.status_msg.connect(self._s2pro_status.setText)
+        self._s2pro_worker.finished.connect(self._on_s2pro_done)
+        self._s2pro_worker.start()
+
+    def _on_s2pro_done(self, ok: bool, msg: str) -> None:
+        self._s2pro_btn.setEnabled(True)
+        if ok:
+            import src.config as cfg
+            cfg.FISH_SPEECH_CPP_MODEL     = str(_S2PRO_LOCAL / "s2-pro-q8_0.gguf")
+            cfg.FISH_SPEECH_CPP_TOKENIZER = str(_S2PRO_LOCAL / "tokenizer.json")
+            _persist_env({
+                "FISH_SPEECH_CPP_MODEL":     cfg.FISH_SPEECH_CPP_MODEL,
+                "FISH_SPEECH_CPP_TOKENIZER": cfg.FISH_SPEECH_CPP_TOKENIZER,
+            })
+        self._refresh_s2pro_status()
+        if not ok:
+            self._s2pro_status.setText(f"Error: {msg}")
+            self._s2pro_status.setStyleSheet("color: #f44336;")
 
     def _save(self) -> None:
         import src.config as cfg
@@ -229,7 +320,10 @@ class SettingsDialog(QDialog):
             cfg.LLM_CTX        = int(s(self._llm_ctx))
         except ValueError:
             pass
+        cfg.TTS_BACKEND        = self._tts_backend.currentText()
         cfg.TTS_DEVICE         = self._tts_device.currentText()
+        if hasattr(cfg, "TTS_CLONE_MODEL"):
+            cfg.TTS_CLONE_MODEL = s(self._tts_clone_model) or cfg.TTS_CLONE_MODEL
         try:
             cfg.TTS_CHUNK_SIZE = int(s(self._tts_chunk))
         except ValueError:
@@ -249,6 +343,8 @@ class SettingsDialog(QDialog):
             "OLLAMA_URL":          cfg.OLLAMA_URL,
             "LLM_MODEL":           cfg.LLM_MODEL,
             "LLM_CTX":             str(cfg.LLM_CTX),
+            "TTS_BACKEND":         cfg.TTS_BACKEND,
+            "TTS_CLONE_MODEL":      s(self._tts_clone_model),
             "TTS_DEVICE":          cfg.TTS_DEVICE,
             "TTS_CHUNK_SIZE":      str(cfg.TTS_CHUNK_SIZE),
             "TTS_SEED":            seed_str,

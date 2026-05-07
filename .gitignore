@@ -54,3 +54,6 @@ output/
 # Large files and test data
 *.pdf
 .DS_Store
+
+# Model checkpoints (large binary files — download via Settings > Download S2 Pro)
+checkpoints/

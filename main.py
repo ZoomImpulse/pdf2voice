@@ -16,6 +16,7 @@ VENV_DIR = ROOT / ".venv"
 REQUIREMENTS = ROOT / "requirements.txt"
 SENTINEL = VENV_DIR / ".req_hash"
 TORCH_SENTINEL = VENV_DIR / ".torch_build"
+FISH_SPEECH_SENTINEL = VENV_DIR / ".fish_speech_build"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,28 +89,28 @@ def _cuda_tag(cuda_ver: str) -> str:
 
 
 def _install_torch(cuda_ver: str | None) -> str:
-    """Uninstall existing torch and reinstall with the correct CUDA build."""
-    # Uninstall first so pip doesn't skip reinstall when version matches
+    """Uninstall existing torch/torchaudio and reinstall with the correct CUDA build."""
     subprocess.run(
-        [str(_venv_python()), "-m", "pip", "uninstall", "torch", "-y"],
+        [str(_venv_python()), "-m", "pip", "uninstall", "torch", "torchaudio", "-y"],
         capture_output=True,
     )
 
     if cuda_ver is None:
-        _print_warn("Keine NVIDIA-GPU gefunden — installiere PyTorch (CPU).")
+        _print_warn("No NVIDIA GPU found — installing PyTorch + torchaudio (CPU).")
         subprocess.check_call([
-            str(_venv_python()), "-m", "pip", "install", "--quiet", "torch",
+            str(_venv_python()), "-m", "pip", "install", "--quiet",
+            "torch", "torchaudio",
         ])
         return "cpu"
 
     tag = _cuda_tag(cuda_ver)
     index_url = f"https://download.pytorch.org/whl/{tag}"
-    _print(f"CUDA {cuda_ver} erkannt → installiere PyTorch ({tag}) ...")
+    _print(f"CUDA {cuda_ver} detected → installing PyTorch + torchaudio ({tag}) ...")
     subprocess.check_call([
         str(_venv_python()), "-m", "pip", "install", "--quiet",
-        "torch", "--index-url", index_url,
+        "torch", "torchaudio", "--index-url", index_url,
     ])
-    _print_ok(f"PyTorch ({tag}) installiert.")
+    _print_ok(f"PyTorch + torchaudio ({tag}) installed.")
     return tag
 
 
@@ -122,13 +123,26 @@ def _torch_needs_reinstall(cuda_ver: str | None) -> bool:
     return installed_tag != wanted_tag
 
 
+def _install_fish_speech() -> None:
+    if FISH_SPEECH_SENTINEL.exists():
+        _print("fish-speech already installed.")
+        return
+    _print("Installing fish-speech from GitHub ...")
+    subprocess.check_call([
+        str(_venv_python()), "-m", "pip", "install", "--quiet",
+        "git+https://github.com/fishaudio/fish-speech.git",
+    ])
+    FISH_SPEECH_SENTINEL.write_text("ok")
+    _print_ok("fish-speech installed.")
+
+
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 def bootstrap() -> None:
     if not VENV_DIR.exists():
-        _print("Erstelle virtuelle Umgebung (.venv) ...")
+        _print("Creating virtual environment (.venv) ...")
         subprocess.check_call([sys.executable, "-m", "venv", str(VENV_DIR)])
-        _print_ok("Virtuelle Umgebung erstellt.")
+        _print_ok("Virtual environment created.")
 
     subprocess.check_call([
         str(_venv_python()), "-m", "pip", "install", "--quiet", "--upgrade", "pip",
@@ -140,18 +154,20 @@ def bootstrap() -> None:
         tag = _install_torch(cuda_ver)
         TORCH_SENTINEL.write_text(tag)
     else:
-        _print(f"PyTorch ({TORCH_SENTINEL.read_text().strip()}) bereits installiert.")
+        _print(f"PyTorch ({TORCH_SENTINEL.read_text().strip()}) already installed.")
+
+    _install_fish_speech()
 
     if _needs_install():
-        _print("Installiere Abhängigkeiten aus requirements.txt ...")
+        _print("Installing dependencies from requirements.txt ...")
         subprocess.check_call([
             str(_venv_python()), "-m", "pip", "install", "--quiet",
             "-r", str(REQUIREMENTS),
         ])
         SENTINEL.write_text(_req_hash())
-        _print_ok("Abhängigkeiten bereit.")
+        _print_ok("Dependencies ready.")
 
-    _print("Starte App ...")
+    _print("Starting app ...")
     result = subprocess.run([str(_venv_python())] + sys.argv)
     sys.exit(result.returncode)
 
@@ -172,7 +188,7 @@ def main() -> None:
     pdf_path = sys.argv[1] if len(sys.argv) > 1 else None
     qt_app = QApplication(sys.argv)
     window = Pdf2VoiceApp(pdf_path=pdf_path)
-    window.show()
+    window.showMaximized()
     sys.exit(qt_app.exec())
 
 

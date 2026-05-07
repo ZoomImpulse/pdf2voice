@@ -844,4 +844,150 @@ QLabel#exp-icon {
 QFrame#card-sep {
     background: #1a1a24;
 }
+
+/* ── Voice Designer dialog ───────────────────────────────────────── */
+QFrame#vd-genre-panel {
+    background: #0f0f13;
+    border-right: 1px solid #1e1e2e;
+}
+
+QListWidget#vd-genre-list {
+    background: #0f0f13;
+    border: none;
+    color: #94a3b8;
+    font-size: 13px;
+    outline: none;
+}
+QListWidget#vd-genre-list::item {
+    padding: 8px 12px;
+    border-radius: 4px;
+}
+QListWidget#vd-genre-list::item:selected {
+    background: #2e1f5e;
+    color: #c4b5fd;
+}
+QListWidget#vd-genre-list::item:hover:!selected {
+    background: #17171f;
+}
+
+QLabel#vd-spec-label {
+    color: #475569;
+    font-size: 11px;
+}
+
+QLineEdit#vd-spec-field {
+    background: #111118;
+    border: 1px solid #2e2e4a;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #cbd5e1;
+    font-size: 12px;
+}
+QLineEdit#vd-spec-field:focus {
+    border-color: #7c3aed;
+}
+
+QLabel#vd-genre-title {
+    color: #a78bfa;
+    font-size: 18px;
+    font-weight: 700;
+    padding-bottom: 6px;
+}
+
+QTextEdit#vd-instruct-view {
+    background: #111118;
+    border: 1px solid #2e2e4a;
+    border-radius: 6px;
+    padding: 10px;
+    color: #cbd5e1;
+    font-size: 12px;
+}
+QTextEdit#vd-instruct-view:focus {
+    border-color: #7c3aed;
+}
+
+QPushButton#vd-reset-prompt-btn {
+    background: transparent;
+    border: none;
+    color: #475569;
+    font-size: 11px;
+    padding: 2px 4px;
+}
+QPushButton#vd-reset-prompt-btn:hover {
+    color: #a78bfa;
+}
+
+QProgressBar#vd-progress {
+    background: #2a2a3e;
+    border: none;
+    border-radius: 4px;
+    max-height: 6px;
+}
+QProgressBar#vd-progress::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #7c3aed, stop:1 #a78bfa);
+    border-radius: 4px;
+}
+
+QLabel#vd-log-msg {
+    color: #475569;
+    font-size: 11px;
+}
+
+QLabel#vd-status-text {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QPushButton#vd-use-btn {
+    background: #15803d;
+    border: 1px solid #16a34a;
+    border-radius: 6px;
+    padding: 6px 18px;
+    color: #f0fdf4;
+    font-weight: 600;
+}
+QPushButton#vd-use-btn:hover    { background: #16a34a; }
+QPushButton#vd-use-btn:disabled {
+    background: #1a2e1a;
+    border-color: #1a2e1a;
+    color: #3a5a3a;
+}
+
+QPushButton#vd-replay-btn {
+    background: transparent;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+QPushButton#vd-replay-btn:hover { border-color: #7c3aed; color: #a78bfa; }
+QPushButton#vd-replay-btn:disabled { color: #2d3748; border-color: #1e1e2e; }
+
+QPushButton#vd-reset-btn {
+    background: transparent;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #64748b;
+    font-size: 12px;
+}
+QPushButton#vd-reset-btn:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+}
+QPushButton#vd-reset-btn:disabled { color: #2d3748; border-color: #1e1e2e; }
+
+QPushButton#vd-close-btn {
+    background: transparent;
+    border: 1px solid #2e2e3e;
+    border-radius: 6px;
+    padding: 6px 20px;
+    color: #94a3b8;
+}
+QPushButton#vd-close-btn:hover {
+    border-color: #64748b;
+    color: #e2e8f0;
+}
 """

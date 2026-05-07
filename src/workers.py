@@ -32,6 +32,7 @@ class PipelineWorker(QThread):
     all_done         = pyqtSignal(list, object)   # output_paths, final_path | None
     failed           = pyqtSignal(str)
     stage_status     = pyqtSignal(str)            # free-form status override (e.g. per-chapter adapt)
+    chunk_step       = pyqtSignal(int, int)        # step, total_steps within current chunk
     def __init__(
         self,
         pdf_path: str,
@@ -407,29 +408,38 @@ class PipelineWorker(QThread):
             self._confirm_event.wait()
             self._check_cancel()
 
-        # ── Stage 2: Voice Anchor ──────────────────────────────────────
+        # ── Stage 2: Generation (includes voice anchor loading) ────────
         self._current_stage = 2
         self.stage_running.emit(2)
-        gender_label = "Female" if gender == "female" else "Male"
-        self.log_info.emit(f"Voice Anchor: generating reference ({gender_label}) …")
-
-        _anchor_stage_done = False
 
         def _anchor_cb(pct: float) -> None:
-            nonlocal _anchor_stage_done
             while self._paused and not self._cancelled:
                 self.msleep(150)
             if self._cancelled:
                 raise _Cancelled
-            self.stage_progress.emit(2, int(pct), 100)
-            if pct >= 100.0 and not _anchor_stage_done:
-                _anchor_stage_done = True
-                self.stage_done.emit(2)
-                self._current_stage = 3
-                self.stage_running.emit(3)
 
         def _tts_log(msg: str) -> None:
             self.log_info.emit(msg)
+
+        # Tracks which chunk is currently being synthesised so the step callback
+        # can embed chapter/chunk context in the status label.
+        _current_chunk_label: list[str] = ["Generating speech"]
+
+        def _chunk_start_cb(ch_idx: int, ck_idx: int, n_chunks: int, tot_ch: int) -> None:
+            label = f"Chapter {ch_idx + 1}/{tot_ch} — chunk {ck_idx + 1}/{n_chunks}"
+            _current_chunk_label[0] = label
+            self.stage_status.emit(label)
+
+        def _chunk_step_cb(step: int, total: int) -> None:
+            if total > 0:
+                self.chunk_step.emit(step, total)
+                pct = int((step / total) * 100)
+                label = _current_chunk_label[0]
+                eta_str = ""
+                # Rough ETA based on steps remaining (updated every step)
+                self.stage_status.emit(
+                    f"{label} — token {step + 1}/{total} ({pct}%)"
+                )
 
         def _content_cb(ch_idx: int, g_chunk: int, tot_ch: int, tot_chunks: int) -> None:
             while self._paused and not self._cancelled:
@@ -437,7 +447,7 @@ class PipelineWorker(QThread):
             if self._cancelled:
                 raise _Cancelled
             pct = int((g_chunk / max(tot_chunks, 1)) * 100)
-            self.stage_progress.emit(3, pct, 100)
+            self.stage_progress.emit(2, pct, 100)
             self.chapter_running.emit(ch_idx + 1)
 
         def _is_cancelled() -> bool:
@@ -445,17 +455,18 @@ class PipelineWorker(QThread):
 
         output_paths, final_path = generate_audiobook(
             book=book,
-            gender=gender,
             log_cb=_tts_log,
             anchor_cb=_anchor_cb,
             content_cb=_content_cb,
+            chunk_start_cb=_chunk_start_cb,
+            chunk_step_cb=_chunk_step_cb,
             cancelled=_is_cancelled,
             session=session,
         )
 
         for ch in book.chapters:
             self.chapter_done.emit(ch.index)
-        self.stage_done.emit(3)
+        self.stage_done.emit(2)
 
         self.log_success.emit(
             f"Done! {len(output_paths)} chapter file(s) in {OUTPUT_DIR}"
@@ -623,3 +634,77 @@ class _Cancelled(BaseException):
     through third-party ``except Exception`` handlers (e.g. inside the
     extractor / TTS engine) without being accidentally swallowed.
     """
+
+
+class VoiceDesignWorker(QThread):
+    """Generates a genre voice anchor WAV in a background thread."""
+
+    log         = pyqtSignal(str)
+    progress    = pyqtSignal(float)
+    finished_ok = pyqtSignal(object)   # Path
+    failed      = pyqtSignal(str)
+
+    def __init__(
+        self,
+        genre: str,
+        language: str = "en",
+        voice_instruct: str = "",
+    ) -> None:
+        super().__init__()
+        self._genre          = genre
+        self._language       = language
+        self._voice_instruct = voice_instruct
+        self._cancelled      = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            from src.pipeline.tts_engine import generate_genre_voice_anchor
+            path = generate_genre_voice_anchor(
+                genre=self._genre,
+                language=self._language,
+                voice_instruct=self._voice_instruct,
+                log_cb=self.log.emit,
+                progress_cb=self.progress.emit,
+                cancelled=lambda: self._cancelled,
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class VoiceFillWorker(QThread):
+    """Calls the LLM to fill all voice spec fields from a natural-language prompt."""
+
+    filled = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        prompt: str,
+        provider: str,
+        model: str,
+        api_key: str = "",
+        ollama_base_url: str = "http://localhost:11434",
+    ) -> None:
+        super().__init__()
+        self._prompt          = prompt
+        self._provider        = provider
+        self._model           = model
+        self._api_key         = api_key
+        self._ollama_base_url = ollama_base_url
+
+    def run(self) -> None:
+        try:
+            from src.pipeline.adapter import fill_voice_spec
+            spec = fill_voice_spec(
+                prompt=self._prompt,
+                provider=self._provider,
+                model=self._model,
+                api_key=self._api_key,
+                ollama_base_url=self._ollama_base_url,
+            )
+            self.filled.emit(spec)
+        except Exception as exc:
+            self.failed.emit(str(exc))

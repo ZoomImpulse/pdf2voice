@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+
 _ACCENT: dict[str, str] = {
     "pending": "#1e1e2e",
     "running": "#7c3aed",
@@ -167,6 +168,10 @@ class _ExpandableChapterCard(QFrame):
         if self._expanded and not self._in_edit_mode and self._chunks:
             self._render_read_only()
 
+    def refresh_if_expanded(self) -> None:
+        if self._expanded and self._chunks and not self._in_edit_mode:
+            self._render_read_only()
+
     def show_chapter_content(
         self,
         chunks: list[str],
@@ -189,6 +194,8 @@ class _ExpandableChapterCard(QFrame):
         self._expand_visual()
 
     def _render_read_only(self) -> None:
+        display_chunks = self._chunks
+
         self._clear_content()
 
         # Title announcement
@@ -208,15 +215,16 @@ class _ExpandableChapterCard(QFrame):
             self._content_layout.addWidget(ann)
 
         # Meta row
-        total_chars = sum(len(c) for c in self._chunks)
-        chunk_word  = "chunk" if len(self._chunks) == 1 else "chunks"
-        meta = QLabel(f"{len(self._chunks)} {chunk_word}  ·  {total_chars:,} characters")
+        total_chars = sum(len(c) for c in display_chunks)
+        chunk_word  = "chunk" if len(display_chunks) == 1 else "chunks"
+        meta_text   = f"{len(display_chunks)} {chunk_word}  ·  {total_chars:,} characters"
+        meta = QLabel(meta_text)
         meta.setObjectName("preview-meta")
         self._content_layout.addWidget(meta)
 
         # Up to 5 chunk cards
-        max_shown = min(len(self._chunks), 5)
-        for i, chunk in enumerate(self._chunks[:max_shown], start=1):
+        max_shown = min(len(display_chunks), 5)
+        for i, chunk in enumerate(display_chunks[:max_shown], start=1):
             card = QFrame()
             card.setObjectName("preview-chunk-card")
             ck = QVBoxLayout(card)
@@ -243,8 +251,8 @@ class _ExpandableChapterCard(QFrame):
             ck.addWidget(body)
             self._content_layout.addWidget(card)
 
-        if len(self._chunks) > max_shown:
-            more_lbl = QLabel(f"… and {len(self._chunks) - max_shown} more chunks")
+        if len(display_chunks) > max_shown:
+            more_lbl = QLabel(f"… and {len(display_chunks) - max_shown} more chunks")
             more_lbl.setObjectName("preview-meta")
             self._content_layout.addWidget(more_lbl)
 
@@ -482,6 +490,10 @@ class ChapterSection(QFrame):
         self._edit_allowed = allowed
         for card in self._cards.values():
             card.set_edit_allowed(allowed)
+
+    def refresh_all_expanded(self) -> None:
+        for card in self._cards.values():
+            card.refresh_if_expanded()
 
     def show_placeholder(self, message: str = "") -> None:
         pass  # chapters expand inline; no separate preview panel

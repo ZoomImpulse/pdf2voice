@@ -20,13 +20,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.config import OUTPUT_DIR
+from src.config import OUTPUT_DIR, VOICE_ANCHORS_DIR
 from src.styles import DARK_STYLESHEET
 from src.widgets.chapter_section import ChapterSection
 from src.widgets.info_bar import InfoBar
 from src.widgets.log_panel import LogPanel
 from src.widgets.pipeline_section import PipelineSection
 from src.widgets.settings_dialog import SettingsDialog
+from src.widgets.voice_designer_dialog import VoiceDesignerDialog
 from src.workers import PipelineWorker, RegenerationWorker
 
 
@@ -88,6 +89,11 @@ class Pdf2VoiceApp(QMainWindow):
         self._open_output_btn.setObjectName("header-btn")
         self._open_output_btn.clicked.connect(self._open_output)
         layout.addWidget(self._open_output_btn)
+
+        self._voice_designer_btn = QPushButton("🎙  Voices")
+        self._voice_designer_btn.setObjectName("header-btn")
+        self._voice_designer_btn.clicked.connect(self._open_voice_designer)
+        layout.addWidget(self._voice_designer_btn)
 
         self._settings_btn = QPushButton("⚙️  Settings")
         self._settings_btn.setObjectName("header-btn")
@@ -214,6 +220,11 @@ class Pdf2VoiceApp(QMainWindow):
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self)
         dlg.exec()
+        self._chapter_section.refresh_all_expanded()
+
+    def _open_voice_designer(self) -> None:
+        dlg = VoiceDesignerDialog(parent=self)
+        dlg.exec()
 
     @pyqtSlot(int, str)
     def _on_chapter_selected(self, index: int, title: str) -> None:
@@ -337,7 +348,7 @@ class Pdf2VoiceApp(QMainWindow):
             chapter_index=chapter_index,
             book=self._book,
             session=self._session,
-            gender=self._info_bar.get_gender(),
+            gender="",
         )
         self._regen_worker.log_info.connect(self._log_panel.info)
         self._regen_worker.log_success.connect(self._log_panel.success)
@@ -402,7 +413,7 @@ class Pdf2VoiceApp(QMainWindow):
                 total    = len(s.chapters)
                 pdf_name = Path(s.pdf_path).name if s.pdf_path else "unknown"
                 item = QListWidgetItem(
-                    f"{s.title or pdf_name}  —  {done}/{total} chapters  ({s.gender})"
+                    f"{s.title or pdf_name}  —  {done}/{total} chapters"
                 )
                 item.setData(Qt.ItemDataRole.UserRole, s)
                 list_widget.addItem(item)
@@ -481,7 +492,6 @@ class Pdf2VoiceApp(QMainWindow):
         self._force_fresh  = False
         self._force_resume = True
         self._info_bar.set_pdf_path(pdf_path)
-        self._info_bar.set_gender(session.gender)
 
     def _on_pdf_selected(self, pdf_path: str) -> None:
         """Called immediately when the user picks a PDF via Browse.
@@ -499,16 +509,12 @@ class Pdf2VoiceApp(QMainWindow):
             if existing is not None and not existing.is_complete:
                 done  = existing.completed_count
                 total = len(existing.chapters)
-                gender_note = (
-                    f"  (recorded as {existing.gender}, currently set to {self._info_bar.get_gender()})"
-                    if existing.gender != self._info_bar.get_gender() else ""
-                )
                 dlg = QMessageBox(self)
                 dlg.setWindowTitle("Existing Session")
                 dlg.setText(
                     f'<b>{existing.title or "Untitled book"}</b>'
                     f"<br><br>A previous session was found for this PDF."
-                    f"<br>{done} of {total} chapters already completed{gender_note}."
+                    f"<br>{done} of {total} chapters already completed."
                     f"<br><br>Would you like to <b>resume</b> or <b>start fresh</b>?"
                 )
                 dlg.setIcon(QMessageBox.Icon.Question)
@@ -519,7 +525,6 @@ class Pdf2VoiceApp(QMainWindow):
                 clicked = dlg.clickedButton()
                 if clicked is btn_resume:
                     self._force_resume = True
-                    self._info_bar.set_gender(existing.gender)
                 elif clicked is btn_fresh:
                     self._force_fresh = True
                 # Cancel: no flags set, user can still pick another file or start later
@@ -534,10 +539,6 @@ class Pdf2VoiceApp(QMainWindow):
         if not Path(pdf_path).is_file():
             self._log_panel.error(f"File not found: {pdf_path}")
             return
-        if not self._info_bar.get_gender():
-            self._log_panel.error("Please select a narrator voice (Female or Male) first.")
-            return
-
         force_fresh  = getattr(self, "_force_fresh",  False)
         force_resume = getattr(self, "_force_resume", False)
 
@@ -553,7 +554,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._info_bar.set_controls_enabled(False)
 
         self._worker = PipelineWorker(
-            pdf_path, self._info_bar.get_gender(),
+            pdf_path, "",
             force_fresh=force_fresh, force_resume=force_resume,
         )
         self._wire_worker(self._worker)
@@ -582,6 +583,7 @@ class Pdf2VoiceApp(QMainWindow):
         w.failed.connect(self._on_failed)
         w.finished.connect(self._on_worker_finished)
         w.stage_status.connect(self._pipeline_panel.set_status)
+        w.chunk_step.connect(self._pipeline_panel.set_chunk_step)
 
     @pyqtSlot(int, int, int)
     def _on_stage_progress(self, stage: int, value: int, maximum: int) -> None:
@@ -637,14 +639,34 @@ class Pdf2VoiceApp(QMainWindow):
             self._cancel_btn.setEnabled(False)
 
     def _confirm_tts(self) -> None:
+        genre = getattr(self._book, "genre", "") if self._book else ""
+        genre_anchor = VOICE_ANCHORS_DIR / f"anchor_{genre}.wav" if genre else None
+        session = self._worker.get_session() if self._worker else None
+
+        has_anchor = (
+            (session is not None and session.anchor_available())
+            or (genre_anchor is not None and genre_anchor.is_file())
+        )
+
+        if not has_anchor:
+            self._log_panel.warn(
+                f"No saved voice for genre '{genre or 'unknown'}' — "
+                "please design one in the Voice Designer first."
+            )
+            dlg = VoiceDesignerDialog(initial_genre=genre, parent=self)
+            dlg.exec()
+
+            # Re-check after the dialog closes
+            if genre_anchor is None or not genre_anchor.is_file():
+                self._log_panel.warn("Voice not saved — save a voice to continue.")
+                return
+
         self._confirm_bar.setVisible(False)
         self._chapter_section.set_edit_allowed(False)
         if self._worker:
             self._worker.confirm()
         self._app_state = "running"
         self._set_controls("running")
-        self._log_panel.info("Confirmed — starting TTS generation …")
-        self._status_lbl.setText("Generating …")
         self._log_panel.info("Confirmed — starting TTS generation …")
         self._status_lbl.setText("Generating …")
 
@@ -655,6 +677,16 @@ class Pdf2VoiceApp(QMainWindow):
             self._status_lbl.setText("Paused" if paused else "Running …")
 
     def _cancel_pipeline(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Cancel Pipeline",
+            "Are you sure you want to cancel the current run?\n"
+            "Progress up to the last completed chunk will be saved.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self._confirm_bar.setVisible(False)
         if self._worker:
             self._worker.cancel()
