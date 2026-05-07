@@ -65,6 +65,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._chapter_section.chapter_edit_saved.connect(self._on_chapter_edit_saved)
         self._chapter_section.chapter_regen_requested.connect(self._on_chapter_regen_requested)
         self._chapter_section.chapter_selected.connect(self._on_chapter_selected)
+        self._chapter_section.chapter_delete_requested.connect(self._on_chapter_delete_requested)
         self._info_bar.pdf_selected.connect(self._on_pdf_selected)
 
         # Check for incomplete sessions after the window is shown
@@ -307,6 +308,30 @@ class Pdf2VoiceApp(QMainWindow):
             f"Chapter {chapter_index} re-chunked: "
             f"{len(new_chunks)} chunks, {sum(len(c) for c in new_chunks):,} characters"
         )
+
+    # ── Chapter deletion ──────────────────────────────────────────────────────
+
+    @pyqtSlot(int)
+    def _on_chapter_delete_requested(self, chapter_index: int) -> None:
+        if self._book is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Kapitel löschen",
+            f"Kapitel {chapter_index} wirklich löschen?\nDiese Aktion kann nicht rückgängig gemacht werden.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._book.chapters = [ch for ch in self._book.chapters if ch.index != chapter_index]
+        if self._session:
+            self._session.delete_chapter(chapter_index)
+            self._session.save()
+
+        self._chapter_section.remove_chapter(chapter_index)
+        self._log_panel.info(f"Kapitel {chapter_index} gelöscht.")
 
     # ── Chapter regeneration ──────────────────────────────────────────────────
 

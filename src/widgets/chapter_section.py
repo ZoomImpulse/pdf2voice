@@ -35,6 +35,7 @@ class _ExpandableChapterCard(QFrame):
     clicked_sig   = pyqtSignal(int, str)
     regen_clicked = pyqtSignal(int)
     edit_saved    = pyqtSignal(int, str)
+    delete_clicked = pyqtSignal(int)
 
     def __init__(self, index: int, title: str, parent=None) -> None:
         super().__init__(parent)
@@ -261,6 +262,10 @@ class _ExpandableChapterCard(QFrame):
         btn_row.setSpacing(8)
         btn_row.addStretch()
         if self._edit_allowed:
+            del_btn = QPushButton("🗑  Delete")
+            del_btn.setObjectName("btn-delete-chapter")
+            del_btn.clicked.connect(lambda: self.delete_clicked.emit(self._index))
+            btn_row.addWidget(del_btn)
             edit_btn = QPushButton("✎  Edit")
             edit_btn.setObjectName("btn-edit-chapter")
             edit_btn.clicked.connect(self._enter_edit_mode)
@@ -374,9 +379,10 @@ def _delete_layout(layout) -> None:
 class ChapterSection(QFrame):
     """Vertical chapter review section with expandable inline preview."""
 
-    chapter_selected        = pyqtSignal(int, str)
-    chapter_regen_requested = pyqtSignal(int)
-    chapter_edit_saved      = pyqtSignal(int, str)
+    chapter_selected          = pyqtSignal(int, str)
+    chapter_regen_requested   = pyqtSignal(int)
+    chapter_edit_saved        = pyqtSignal(int, str)
+    chapter_delete_requested  = pyqtSignal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -491,6 +497,15 @@ class ChapterSection(QFrame):
         for card in self._cards.values():
             card.set_edit_allowed(allowed)
 
+    def remove_chapter(self, index: int) -> None:
+        card = self._cards.pop(index, None)
+        if card is not None:
+            self._cards_layout.removeWidget(card)
+            card.deleteLater()
+        if not self._cards:
+            self._placeholder.setVisible(True)
+        self._update_count()
+
     def refresh_all_expanded(self) -> None:
         for card in self._cards.values():
             card.refresh_if_expanded()
@@ -518,6 +533,7 @@ class ChapterSection(QFrame):
         card.clicked_sig.connect(self._on_card_clicked)
         card.regen_clicked.connect(self.chapter_regen_requested)
         card.edit_saved.connect(self.chapter_edit_saved)
+        card.delete_clicked.connect(self.chapter_delete_requested)
         self._cards[idx] = card
         self._cards_layout.addWidget(card)
 

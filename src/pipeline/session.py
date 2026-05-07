@@ -84,6 +84,9 @@ class BookSession:
         if ch:
             ch.completed_chunks = chunk_count
 
+    def delete_chapter(self, index: int) -> None:
+        self.chapters = [ch for ch in self.chapters if ch.index != index]
+
     def update_chapter_text(
         self, index: int, chunks: list[str], pauses: list[float]
     ) -> None:
