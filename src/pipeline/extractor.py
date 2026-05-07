@@ -121,22 +121,65 @@ def extract_toc_from_pages(
         if log_cb:
             log_cb(f"TOC Text: Scanning first {pages_to_scan} pages for TOC …")
 
+        # Known TOC headings in German, English, French, Spanish, Italian,
+        # Portuguese, Dutch, Polish, Czech, and other languages commonly found
+        # in books processed by this tool.
+        _TOC_KEYWORDS = {
+            # English
+            "contents", "table of contents", "chapters",
+            # German
+            "inhalt", "inhaltsverzeichnis", "inhaltsübersicht",
+            "kapitelübersicht", "verzeichnis",
+            # French
+            "sommaire", "table des matières",
+            # Spanish
+            "índice", "indice", "contenido", "tabla de contenidos",
+            # Italian
+            "indice", "sommario",
+            # Portuguese
+            "índice", "sumário",
+            # Dutch
+            "inhoudsopgave", "inhoud",
+            # Polish
+            "spis treści",
+            # Czech / Slovak
+            "obsah",
+            # Russian (transliterated)
+            "содержание",
+        }
+
+        def _looks_like_toc(text: str, min_numeric_lines: int = 4) -> bool:
+            """Structural heuristic: many lines ending in a standalone number."""
+            count = sum(
+                1 for line in text.splitlines()
+                if re.search(r"\b\d{1,4}\s*$", line.strip())
+            )
+            return count >= min_numeric_lines
+
         toc_page_text: str | None = None
         toc_page_num: int = -1
+        structural_candidate: tuple[str, int] | None = None  # (text, 1-based page)
 
         for page_num in range(pages_to_scan):
             text = doc[page_num].get_text()
             text_lower = text.lower()
-            has_contents_heading = any(
-                kw in text_lower for kw in ("contents", "table of contents", "inhaltsverzeichnis")
-            )
+            has_contents_heading = any(kw in text_lower for kw in _TOC_KEYWORDS)
             line_count = len([l for l in text.splitlines() if l.strip()])
             if has_contents_heading and line_count >= 3:
                 if log_cb:
-                    log_cb(f"TOC Text: Found TOC candidate on page {page_num + 1}")
+                    log_cb(f"TOC Text: Found TOC candidate (keyword) on page {page_num + 1}")
                 toc_page_text = text
                 toc_page_num = page_num + 1
                 break
+            # Record first structurally-matching page as a fallback
+            if structural_candidate is None and _looks_like_toc(text):
+                structural_candidate = (text, page_num + 1)
+
+        # Fall back to structural detection if no keyword matched
+        if toc_page_text is None and structural_candidate is not None:
+            toc_page_text, toc_page_num = structural_candidate
+            if log_cb:
+                log_cb(f"TOC Text: Found TOC candidate (structure) on page {toc_page_num}")
 
         doc.close()
 
