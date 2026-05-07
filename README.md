@@ -128,7 +128,7 @@ Adaptation can be disabled (`ADAPTATION_ENABLED=false`) for faster processing or
 Open via the **Voices** button. Lets you customise the narrator voice for each genre across 12 parameters: gender, pitch, speed, volume, age, clarity, fluency, accent, texture, emotion, tone, and personality.
 
 - Select a genre to load its built-in template
-- Edit any field manually or use **AI Fill** to let the LLM populate the form from a free-text description
+- Edit any field manually or use **AI Fill** to let the LLM populate the form from a free-text description — uses whichever provider is configured (`ADAPTATION_PROVIDER`: Ollama or OpenRouter)
 - **Generate** synthesises a short sample with the current spec
 - **Use** saves the anchor and sets it as the active voice for that genre
 
