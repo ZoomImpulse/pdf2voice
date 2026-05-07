@@ -413,9 +413,13 @@ def generate_audiobook(
     final_path: Path | None = None
     if len(output_paths) > 1:
         final_path = OUTPUT_DIR / f"{safe_title}_complete.wav"
-        _merge_chapters(output_paths, final_path, log_cb)
+        _merge_chapters(output_paths, final_path, log_cb)  # MP3 encoded inside
     elif output_paths:
         final_path = output_paths[0]
+        audio, sr = sf.read(str(final_path), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        _to_mp3(audio, sr, final_path, log_cb)
 
     # Delete transient anchor only (no session); persistent sessions are
     # managed by the caller (app.py) so regeneration remains possible.
@@ -789,6 +793,30 @@ def _merge_and_save(
         log_cb(f"TTS: Saved -> {output.name} ({len(combined) / sr:.1f}s)")
 
 
+def _to_mp3(
+    audio: np.ndarray,
+    sr: int,
+    wav_path: Path,
+    log_cb: Callable[[str], None] | None = None,
+) -> None:
+    try:
+        import lameenc
+        pcm = (audio * 32767).clip(-32768, 32767).astype(np.int16)
+        enc = lameenc.Encoder()
+        enc.set_bit_rate(192)
+        enc.set_in_sample_rate(sr)
+        enc.set_channels(1)
+        enc.set_quality(2)
+        mp3_data = enc.encode(pcm.tobytes()) + enc.flush()
+        mp3_path = wav_path.with_suffix(".mp3")
+        mp3_path.write_bytes(mp3_data)
+        if log_cb:
+            log_cb(f"TTS: MP3 saved -> {mp3_path.name}")
+    except Exception as exc:
+        if log_cb:
+            log_cb(f"TTS: MP3 encoding failed ({exc})")
+
+
 def _merge_chapters(
     chapter_paths: list[Path],
     output: Path,
@@ -815,6 +843,7 @@ def _merge_chapters(
     if log_cb:
         m, s = divmod(int(len(combined) / sr), 60)
         log_cb(f"TTS: Full audiobook saved -> {output.name} ({m}m {s}s)")
+    _to_mp3(combined, sr, output, log_cb)
 
 
 def _safe_filename(name: str, max_len: int = 60) -> str:
