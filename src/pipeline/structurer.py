@@ -65,6 +65,7 @@ class StructuredBook:
     genre: str = ""
     subdivision_type: str = "Chapter"
     chapters: list[Chapter] = field(default_factory=list)
+    metadata_sample: str = ""  # short excerpt used for LLM metadata; empty for resumed sessions
 
     @property
     def total_chunks(self) -> int:
@@ -194,6 +195,7 @@ def structure_content(
         subdivision_type=subdivision_type,
         voice_instruct=voice_instruct,
         chapters=chapters,
+        metadata_sample=pre.sample,
     )
 
 
@@ -246,7 +248,7 @@ def _call_llm_for_metadata(
 
             if provider == "openrouter":
                 from src.pipeline.adapter import _call_openrouter as _or_call
-                raw = _or_call(sample, model, api_key)
+                raw = _or_call(sample, model, api_key, system_prompt=system)
                 if log_cb:
                     log_cb("LLM: Metadata received")
                 raw = _strip_code_fences(raw.strip())

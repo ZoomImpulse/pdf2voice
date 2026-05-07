@@ -26,10 +26,11 @@ from src.styles import DARK_STYLESHEET
 from src.widgets.chapter_section import ChapterSection
 from src.widgets.info_bar import InfoBar
 from src.widgets.log_panel import LogPanel
+from src.widgets.metadata_card import MetadataCard
 from src.widgets.pipeline_section import PipelineSection
 from src.widgets.settings_dialog import SettingsDialog
 from src.widgets.voice_designer_dialog import VoiceDesignerDialog
-from src.workers import PipelineWorker, RegenerationWorker
+from src.workers import MetadataReanalyzeWorker, PipelineWorker, RegenerationWorker
 
 
 class Pdf2VoiceApp(QMainWindow):
@@ -38,6 +39,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._initial_path = pdf_path or ""
         self._worker: PipelineWorker | None = None
         self._regen_worker: RegenerationWorker | None = None
+        self._reanalyze_worker: MetadataReanalyzeWorker | None = None
         self._book = None
         self._session = None
         self._app_state = "idle"   # "idle"|"running"|"awaiting"|"complete"|"regenerating"
@@ -68,6 +70,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._chapter_section.chapter_selected.connect(self._on_chapter_selected)
         self._chapter_section.chapter_delete_requested.connect(self._on_chapter_delete_requested)
         self._info_bar.pdf_selected.connect(self._on_pdf_selected)
+        self._metadata_card.reanalyze_requested.connect(self._on_reanalyze_requested)
 
         # Check for incomplete sessions after the window is shown
         if not self._initial_path:
@@ -125,6 +128,10 @@ class Pdf2VoiceApp(QMainWindow):
         # ── Pipeline section ──────────────────────────────────────────
         self._pipeline_panel = PipelineSection()
         layout.addWidget(self._pipeline_panel)
+
+        # ── Metadata card (hidden until book_ready) ───────────────────
+        self._metadata_card = MetadataCard()
+        layout.addWidget(self._metadata_card)
 
         # ── Confirmation banner (hidden until structuring finishes) ───
         self._confirm_bar = self._make_confirm_bar()
@@ -411,6 +418,80 @@ class Pdf2VoiceApp(QMainWindow):
         self._chapter_section.set_regen_enabled_all(True)
         self._regen_worker = None
 
+    # ── Metadata reanalysis ───────────────────────────────────────────────────
+
+    @pyqtSlot()
+    def _on_reanalyze_requested(self) -> None:
+        if self._book is None or not getattr(self._book, "metadata_sample", ""):
+            return
+        from src.config import (
+            ADAPTATION_PROVIDER, LLM_MODEL,
+            OLLAMA_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL,
+        )
+        model = OPENROUTER_MODEL if ADAPTATION_PROVIDER == "openrouter" else LLM_MODEL
+        self._metadata_card.set_busy(True)
+        self._log_panel.info("Reanalyzing metadata via LLM …")
+        self._reanalyze_worker = MetadataReanalyzeWorker(
+            sample=self._book.metadata_sample,
+            model=model,
+            provider=ADAPTATION_PROVIDER,
+            api_key=OPENROUTER_API_KEY,
+            ollama_url=OLLAMA_URL,
+        )
+        self._reanalyze_worker.log_info.connect(self._log_panel.info)
+        self._reanalyze_worker.metadata_ready.connect(self._on_reanalyze_done)
+        self._reanalyze_worker.failed.connect(self._on_reanalyze_failed)
+        self._reanalyze_worker.finished.connect(self._on_reanalyze_worker_finished)
+        self._reanalyze_worker.start()
+
+    @pyqtSlot(dict)
+    def _on_reanalyze_done(self, meta: dict) -> None:
+        if self._book is None:
+            return
+        from src.config import GENRE_PROMPTS, TTS_VOICE_INSTRUCT
+        new_title    = meta.get("title", self._book.title) or self._book.title
+        new_language = meta.get("language", self._book.language) or self._book.language
+        new_genre    = meta.get("genre", "").strip().lower()
+        new_subdiv   = meta.get("subdivision_type", self._book.subdivision_type) or self._book.subdivision_type
+
+        self._book.title            = new_title
+        self._book.language         = new_language
+        self._book.subdivision_type = new_subdiv
+        if new_genre:
+            self._book.genre          = new_genre
+            self._book.voice_instruct = GENRE_PROMPTS.get(new_genre, TTS_VOICE_INSTRUCT)
+
+        if self._session:
+            self._session.title            = self._book.title
+            self._session.language         = self._book.language
+            self._session.genre            = self._book.genre
+            self._session.subdivision_type = self._book.subdivision_type
+            self._session.voice_instruct   = self._book.voice_instruct
+            self._session.save()
+
+        self._metadata_card.populate(self._book)
+
+        if new_genre:
+            self._genre_combo.blockSignals(True)
+            idx = self._genre_combo.findText(new_genre)
+            if idx >= 0:
+                self._genre_combo.setCurrentIndex(idx)
+            self._genre_combo.blockSignals(False)
+
+        self._log_panel.success(
+            f"Metadata updated — title: {new_title!r}, genre: {new_genre or '(unchanged)'}, "
+            f"lang: {new_language}"
+        )
+
+    @pyqtSlot(str)
+    def _on_reanalyze_failed(self, error: str) -> None:
+        self._log_panel.error(f"Metadata reanalysis failed: {error}")
+
+    @pyqtSlot()
+    def _on_reanalyze_worker_finished(self) -> None:
+        self._metadata_card.set_busy(False)
+        self._reanalyze_worker = None
+
     # ── Pipeline control ──────────────────────────────────────────────────────
 
     def _check_startup_sessions(self) -> None:
@@ -584,6 +665,7 @@ class Pdf2VoiceApp(QMainWindow):
         self._session = None
         self._app_state = "running"
         self._pipeline_panel.reset_all()
+        self._metadata_card.reset()
         self._chapter_section.clear()
         self._log_panel.clear()
         self._chapter_section.set_edit_allowed(False)
@@ -630,6 +712,7 @@ class Pdf2VoiceApp(QMainWindow):
     @pyqtSlot(object)
     def _on_book_ready(self, book) -> None:
         self._book = book
+        self._metadata_card.populate(book)
 
     @pyqtSlot(list)
     def _on_chapters_ready(self, chapters: list) -> None:
@@ -706,7 +789,8 @@ class Pdf2VoiceApp(QMainWindow):
                 f"No saved voice for genre '{genre or 'unknown'}' — "
                 "please design one in the Voice Designer first."
             )
-            dlg = VoiceDesignerDialog(initial_genre=genre, parent=self)
+            lang = getattr(self._book, "language", "en") if self._book else "en"
+            dlg = VoiceDesignerDialog(initial_genre=genre, initial_language=lang, parent=self)
             dlg.exec()
 
             # Re-check after the dialog closes

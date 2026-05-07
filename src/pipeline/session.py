@@ -189,6 +189,18 @@ def book_from_session(session: BookSession):
         )
         for ch in session.chapters
     ]
+    # Rebuild the metadata sample from available chapter data so the
+    # Reanalyze button works even for resumed sessions.
+    sample_parts: list[str] = []
+    if session.title:
+        sample_parts.append(session.title)
+    for ch in session.chapters[:4]:
+        if ch.title:
+            sample_parts.append(ch.title)
+        if ch.chunks:
+            sample_parts.append(ch.chunks[0][:600])
+    metadata_sample = "\n\n".join(filter(None, sample_parts))[:2500]
+
     return StructuredBook(
         title=session.title,
         language=session.language,
@@ -196,6 +208,7 @@ def book_from_session(session: BookSession):
         subdivision_type=session.subdivision_type,
         voice_instruct=session.voice_instruct,
         chapters=chapters,
+        metadata_sample=metadata_sample,
     )
 
 

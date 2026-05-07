@@ -627,6 +627,47 @@ class RegenerationWorker(QThread):
         self.regen_done.emit(self._chapter_index, final_path)
 
 
+class MetadataReanalyzeWorker(QThread):
+    """Re-runs LLM metadata detection on the stored sample from a StructuredBook."""
+
+    log_info       = pyqtSignal(str)
+    metadata_ready = pyqtSignal(dict)
+    failed         = pyqtSignal(str)
+
+    def __init__(
+        self,
+        sample: str,
+        model: str,
+        provider: str = "ollama",
+        api_key: str = "",
+        ollama_url: str = "http://localhost:11434",
+    ) -> None:
+        super().__init__()
+        self._sample    = sample
+        self._model     = model
+        self._provider  = provider
+        self._api_key   = api_key
+        self._ollama_url = ollama_url
+
+    def run(self) -> None:
+        try:
+            from src.pipeline.structurer import _call_llm_for_metadata
+            meta = _call_llm_for_metadata(
+                self._sample,
+                self._model,
+                log_cb=self.log_info.emit,
+                provider=self._provider,
+                api_key=self._api_key,
+                ollama_base_url=self._ollama_url,
+            )
+            if meta:
+                self.metadata_ready.emit(meta)
+            else:
+                self.failed.emit("LLM returned no metadata")
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class _Cancelled(BaseException):
     """Internal sentinel raised when the pipeline is cancelled.
 

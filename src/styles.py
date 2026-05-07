@@ -166,6 +166,31 @@ QLabel#settings-val {
     font-size: 11px;
 }
 
+/* ── Metadata card values ────────────────────────────────────────── */
+QLabel#metadata-val {
+    color: #fca5a5;
+    font-size: 12px;
+}
+
+/* ── Reanalyze button (inside metadata card) ─────────────────────── */
+QPushButton#btn-reanalyze {
+    background: transparent;
+    border: 1px solid #2a0000;
+    border-radius: 5px;
+    padding: 2px 10px;
+    color: #9f2020;
+    font-size: 11px;
+}
+QPushButton#btn-reanalyze:hover {
+    border-color: #dc2626;
+    color: #f87171;
+    background: #1a0000;
+}
+QPushButton#btn-reanalyze:disabled {
+    color: #350000;
+    border-color: #1a0000;
+}
+
 /* ── Panel section titles ────────────────────────────────────────── */
 QLabel#panel-title {
     font-weight: 700;

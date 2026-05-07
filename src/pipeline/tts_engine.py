@@ -20,6 +20,7 @@ from src.config import (
     FISH_SPEECH_CPP_PORT,
     GENRE_PROMPTS,
     GENRE_SAMPLE_TEXTS,
+    GENRE_SAMPLE_TEXTS_DE,
     OUTPUT_DIR,
     SESSIONS_DIR,
     TTS_BACKEND,
@@ -192,6 +193,10 @@ def _estimate_tokens(text: str) -> int:
 _ANCHOR_SAMPLE_TEXT = (
     "Welcome to this audiobook. I will be your narrator throughout this journey. "
     "Settle in, find a comfortable place, and let the story begin."
+)
+_ANCHOR_SAMPLE_TEXT_DE = (
+    "Willkommen zu diesem Hörbuch. Ich werde Ihr Erzähler auf dieser Reise sein. "
+    "Machen Sie es sich bequem und lassen Sie die Geschichte beginnen."
 )
 
 
@@ -445,9 +450,12 @@ def generate_genre_voice_anchor(
     Writes VOICE_ANCHORS_DIR/anchor_{genre}.wav  (+ .txt sidecar).
     Returns the WAV path, or None on failure/cancellation.
     """
-    sample   = GENRE_SAMPLE_TEXTS.get(genre, _ANCHOR_SAMPLE_TEXT)
-    instruct = voice_instruct.strip() or GENRE_PROMPTS.get(genre, "")
     lang     = _resolve_language(language)
+    if lang == "de":
+        sample = GENRE_SAMPLE_TEXTS_DE.get(genre, _ANCHOR_SAMPLE_TEXT_DE)
+    else:
+        sample = GENRE_SAMPLE_TEXTS.get(genre, _ANCHOR_SAMPLE_TEXT)
+    instruct = voice_instruct.strip() or GENRE_PROMPTS.get(genre, "")
     device   = _resolve_device(log_cb)
 
     if progress_cb:

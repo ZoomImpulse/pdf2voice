@@ -293,6 +293,49 @@ GENRE_SAMPLE_TEXTS: dict[str, str] = {
     ),
 }
 
+GENRE_SAMPLE_TEXTS_DE: dict[str, str] = {
+    "novel": (
+        "Sie stand am Rand des Waldes, die Laterne in ihrer Hand schwingend. "
+        "Zwischen den Bäumen bewegte sich etwas — ein Schatten, der atmete, der wartete."
+    ),
+    "thriller": (
+        "Der Anruf kam um zwei Uhr morgens — drei Worte, dann Stille. "
+        "Er griff bereits nach seinem Mantel, bevor die Leitung tot war."
+    ),
+    "nonfiction": (
+        "Die Beweise, sorgfältig untersucht, weisen in nur eine Richtung. "
+        "Was wir für gesicherte Wissenschaft hielten, entpuppt sich als Arbeitshypothese."
+    ),
+    "biography": (
+        "Über jene Jahre sprach sie nie — nicht mit ihren Kindern, nicht mit den Journalisten, "
+        "die später mit ihren Aufnahmegeräten und bedachtsamen Fragen kamen."
+    ),
+    "selfhelp": (
+        "Veränderung beginnt nicht mit großen Gesten, sondern mit einer einzigen Entscheidung, "
+        "die still getroffen wird, bevor jemand zuschaut."
+    ),
+    "philosophy": (
+        "Zu fragen, was wirklich ist, bedeutet zu fragen, was wir mit dem Fragen meinen. "
+        "Jede Antwort formt die Frage, die danach kommt."
+    ),
+    "technical": (
+        "Eine Hash-Kollision tritt auf, wenn zwei unterschiedliche Eingaben denselben Ausgabewert erzeugen. "
+        "Dieses Phänomen zu verstehen ist das Fundament des modernen kryptografischen Designs."
+    ),
+    "history": (
+        "Am Morgen des vierzehnten Juli 1789 versammelte sich eine Menge vor der Bastille — "
+        "noch keine Armee, noch keine Revolution, aber etwas, für das die alte Ordnung keinen Namen hatte."
+    ),
+    "children": (
+        "Der kleine Fuchs hatte noch nie Schnee gesehen. "
+        "Er drückte seine Nase hinein und nieste laut, dann schaute er sich um, ob jemand es bemerkt hatte."
+    ),
+    "poetry": (
+        "Ich war schon einmal hier — im Scharnier einer Tür, "
+        "in der Pause zwischen einem Atemzug und dem nächsten."
+    ),
+}
+
 # ── Audiobook Adaptation ──────────────────────────────────────────────────────
 # Set ADAPTATION_ENABLED=false to skip LLM adaptation and use raw extracted text.
 ADAPTATION_ENABLED: bool = os.getenv("ADAPTATION_ENABLED", "true").lower() == "true"

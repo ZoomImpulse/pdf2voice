@@ -56,9 +56,10 @@ _FIELD_LABELS: dict[str, str] = {
 
 
 class VoiceDesignerDialog(QDialog):
-    def __init__(self, initial_genre: str = "", parent=None) -> None:
+    def __init__(self, initial_genre: str = "", initial_language: str = "en", parent=None) -> None:
         super().__init__(parent)
-        self._initial_genre = initial_genre
+        self._initial_genre    = initial_genre
+        self._language         = initial_language
         self._worker: VoiceDesignWorker | None = None
         self._preview_path: Path | None = None
         self._watcher: _PlaybackWatcher | None = None
@@ -399,7 +400,7 @@ class VoiceDesignerDialog(QDialog):
                 for f in VOICE_SPEC_FIELDS
             }
         )
-        self._worker = VoiceDesignWorker(genre=genre, voice_instruct=voice_instruct)
+        self._worker = VoiceDesignWorker(genre=genre, language=self._language, voice_instruct=voice_instruct)
         self._worker.log.connect(self._on_worker_log)
         self._worker.progress.connect(self._on_worker_progress)
         self._worker.finished_ok.connect(self._on_worker_finished)

@@ -109,7 +109,12 @@ def _call_ollama(user_msg: str, model: str, base_url: str) -> str:
     return response.message.content.strip()
 
 
-def _call_openrouter(user_msg: str, model: str, api_key: str) -> str:
+def _call_openrouter(
+    user_msg: str,
+    model: str,
+    api_key: str,
+    system_prompt: str | None = None,
+) -> str:
     if not api_key:
         raise ValueError(
             "OPENROUTER_API_KEY is required when ADAPTATION_PROVIDER=openrouter"
@@ -117,7 +122,7 @@ def _call_openrouter(user_msg: str, model: str, api_key: str) -> str:
     payload = json.dumps({
         "model": model,
         "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt if system_prompt is not None else _SYSTEM_PROMPT},
             {"role": "user",   "content": user_msg},
         ],
         "temperature": 0.3,
