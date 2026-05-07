@@ -213,11 +213,13 @@ def _call_llm_for_metadata(
     provider: str = "ollama",
     api_key: str = "",
     ollama_base_url: str = OLLAMA_URL,
+    max_attempts: int = 3,
 ) -> dict | None:
     """Send a short sample to the LLM and return metadata dict.
 
     When structure_suspect=True the chapter title list is appended and the
     response may additionally contain a 'merge_groups' key.
+    Retries up to max_attempts times on JSON parse failures.
     """
     if check_pause:
         check_pause()
@@ -231,74 +233,75 @@ def _call_llm_for_metadata(
         system = system.rstrip() + "\n\n" + STRUCTURE_FIX_ADDENDUM.format(
             chapter_titles=title_list
         )
-    try:
-        if log_cb:
-            if structure_suspect:
-                log_cb("LLM: Structure check active (too many/thin chapters detected) …")
-            log_cb(f"LLM: Waiting for {model} response …")
-        # Use a larger context window when the title list is included
-        ctx_size = 8192 if structure_suspect else 4096
+    # Use a larger context window when the title list is included
+    ctx_size = 8192 if structure_suspect else 4096
 
-        if provider == "openrouter":
-            from src.pipeline.adapter import _call_openrouter as _or_call
-            try:
+    for attempt in range(1, max_attempts + 1):
+        attempt_label = f" (attempt {attempt}/{max_attempts})" if attempt > 1 else ""
+        try:
+            if log_cb:
+                if attempt == 1 and structure_suspect:
+                    log_cb("LLM: Structure check active (too many/thin chapters detected) …")
+                log_cb(f"LLM: Waiting for {model} response{attempt_label} …")
+
+            if provider == "openrouter":
+                from src.pipeline.adapter import _call_openrouter as _or_call
                 raw = _or_call(sample, model, api_key)
                 if log_cb:
-                    log_cb(f"LLM: Metadata received")
+                    log_cb("LLM: Metadata received")
                 raw = _strip_code_fences(raw.strip())
                 return json.loads(raw)
-            except (json.JSONDecodeError, KeyError) as e:
-                if log_cb:
-                    log_cb(f"LLM: Metadata parse failed ({e}) \u2014 using defaults")
-                return None
-            except Exception as e:
-                if log_cb:
-                    log_cb(f"LLM: Metadata detection failed ({e}) \u2014 using defaults")
-                return None
 
-        stream = ollama.Client(host=ollama_base_url).chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": sample},
-            ],
-            options={
-                "temperature": 0.3,
-                "top_p": 0.8,
-                "top_k": 20,
-                "min_p": 0,
-                "num_ctx": ctx_size,
-                "num_gpu": 99,
-            },
-            think=False,
-            stream=True,
-        )
-        parts: list[str] = []
-        token_count = 0
-        last_logged = 0
-        for chunk in stream:
-            if check_pause:
-                check_pause()
-            token = chunk["message"]["content"]
-            parts.append(token)
-            token_count += 1
-            if progress_cb:
-                progress_cb(token_count)
-            if log_cb and token_count - last_logged >= _LOG_TOKEN_INTERVAL:
-                log_cb(f"LLM: {token_count} tokens received …")
-                last_logged = token_count
-        if log_cb:
-            log_cb(f"LLM: Metadata received ({token_count} tokens)")
-        raw = _strip_code_fences("".join(parts).strip())
-        return json.loads(raw)
-    except (json.JSONDecodeError, KeyError) as e:
-        if log_cb:
-            log_cb(f"LLM: Metadata parse failed ({e}) — using defaults")
-        return None
-    except Exception as e:
-        if log_cb:
-            log_cb(f"LLM: Metadata detection failed ({e}) — using defaults")
-        return None
+            stream = ollama.Client(host=ollama_base_url).chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": sample},
+                ],
+                options={
+                    "temperature": 0.3,
+                    "top_p": 0.8,
+                    "top_k": 20,
+                    "min_p": 0,
+                    "num_ctx": ctx_size,
+                    "num_gpu": 99,
+                },
+                think=False,
+                stream=True,
+            )
+            parts: list[str] = []
+            token_count = 0
+            last_logged = 0
+            for chunk in stream:
+                if check_pause:
+                    check_pause()
+                token = chunk["message"]["content"]
+                parts.append(token)
+                token_count += 1
+                if progress_cb:
+                    progress_cb(token_count)
+                if log_cb and token_count - last_logged >= _LOG_TOKEN_INTERVAL:
+                    log_cb(f"LLM: {token_count} tokens received …")
+                    last_logged = token_count
+            if log_cb:
+                log_cb(f"LLM: Metadata received ({token_count} tokens)")
+            raw = _strip_code_fences("".join(parts).strip())
+            return json.loads(raw)
+
+        except (json.JSONDecodeError, KeyError) as e:
+            if attempt < max_attempts:
+                if log_cb:
+                    log_cb(f"LLM: Metadata parse failed ({e}) — retrying …")
+            else:
+                if log_cb:
+                    log_cb(f"LLM: Metadata parse failed after {max_attempts} attempts ({e}) — using defaults")
+                return None
+        except Exception as e:
+            if log_cb:
+                log_cb(f"LLM: Metadata detection failed ({e}) — using defaults")
+            return None
+
+    return None
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
