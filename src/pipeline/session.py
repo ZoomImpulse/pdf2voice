@@ -96,6 +96,8 @@ class BookSession:
             ch.chunk_pauses = pauses
             ch.done = False
             ch.output = None
+            ch.completed_chunks = 0   # stale resume offset must be cleared
+            ch.adapted_text = None    # adapted text no longer matches new chunks
 
     # ── Persistence ───────────────────────────────────────────────────
 

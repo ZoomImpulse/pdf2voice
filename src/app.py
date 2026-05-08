@@ -244,7 +244,9 @@ class Pdf2VoiceApp(QMainWindow):
         self._chapter_section.refresh_all_expanded()
 
     def _open_voice_designer(self) -> None:
-        dlg = VoiceDesignerDialog(parent=self)
+        genre = getattr(self._book, "genre", "") if self._book else ""
+        lang  = getattr(self._book, "language", "en") if self._book else "en"
+        dlg = VoiceDesignerDialog(initial_genre=genre, initial_language=lang, parent=self)
         dlg.exec()
 
     @pyqtSlot(int, str)
@@ -270,8 +272,8 @@ class Pdf2VoiceApp(QMainWindow):
 
     # ── Chapter text editing ──────────────────────────────────────────────────
 
-    @pyqtSlot(int, str)
-    def _on_chapter_edit_saved(self, chapter_index: int, raw_text: str) -> None:
+    @pyqtSlot(int, str, str)
+    def _on_chapter_edit_saved(self, chapter_index: int, new_title: str, raw_text: str) -> None:
         if self._book is None:
             return
         from src.pipeline.preprocessor import chunk_text as pp_chunk
@@ -300,11 +302,15 @@ class Pdf2VoiceApp(QMainWindow):
         )
         if chapter is None:
             return
+        chapter.title        = new_title
         chapter.chunks       = new_chunks
         chapter.chunk_pauses = new_pauses
 
         # Update session and persist
         if self._session:
+            ch_state = self._session.chapter_state(chapter_index)
+            if ch_state:
+                ch_state.title = new_title
             self._session.update_chapter_text(chapter_index, new_chunks, new_pauses)
             self._session.save()
 

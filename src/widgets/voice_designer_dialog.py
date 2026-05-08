@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import json
+
 from src.config import (
     GENRE_PROMPTS,
     GENRE_VOICE_SPECS,
@@ -29,6 +31,8 @@ from src.config import (
     VOICE_SPEC_FIELDS,
     format_voice_spec,
 )
+
+_VOICE_SPECS_FILE: Path = VOICE_ANCHORS_DIR / "voice_specs.json"
 from src.workers import VoiceDesignWorker, VoiceFillWorker
 
 _GREEN_DOT = "●"
@@ -69,13 +73,33 @@ class VoiceDesignerDialog(QDialog):
         self._preview_path: Path | None = None
         self._watcher: _PlaybackWatcher | None = None
         self._spec_fields: dict[str, QLineEdit | QComboBox] = {}
-        self._edited_specs: dict[str, dict[str, str]] = {}  # user edits per genre
+        self._edited_specs: dict[str, dict[str, str]] = self._load_specs_from_disk()
         self._fill_worker: VoiceFillWorker | None = None
 
         self.setWindowTitle("Voice Designer")
         self.setModal(True)
         self.setMinimumSize(820, 620)
         self._build_ui()
+
+    # ── Persistent spec storage ──────────────────────────────────────────────
+
+    @staticmethod
+    def _load_specs_from_disk() -> dict[str, dict[str, str]]:
+        try:
+            if _VOICE_SPECS_FILE.is_file():
+                return json.loads(_VOICE_SPECS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _persist_specs_to_disk(self) -> None:
+        try:
+            _VOICE_SPECS_FILE.write_text(
+                json.dumps(self._edited_specs, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -319,6 +343,7 @@ class VoiceDesignerDialog(QDialog):
             )
             for f, w in self._spec_fields.items()
         }
+        self._persist_specs_to_disk()
 
     def _populate_spec_fields(self, genre: str) -> None:
         spec = self._edited_specs.get(genre) or GENRE_VOICE_SPECS.get(genre, {})
@@ -410,6 +435,10 @@ class VoiceDesignerDialog(QDialog):
             self._worker.cancel()
             self._worker.wait(2000)
 
+        # Persist the current field values before generating so reopening the
+        # dialog always shows the spec that matches the active voice anchor.
+        self._save_spec_fields(genre)
+
         self._generate_btn.setEnabled(False)
         self._replay_btn.setEnabled(False)
         self._use_btn.setEnabled(False)
@@ -462,7 +491,6 @@ class VoiceDesignerDialog(QDialog):
         self._replay_btn.setEnabled(True)
         self._use_btn.setEnabled(True)
         self._reset_btn.setEnabled(True)
-        self._play_sample_btn.setEnabled(True)
         self._play_wav(path)  # type: ignore[arg-type]
 
     @pyqtSlot(str)
@@ -495,6 +523,7 @@ class VoiceDesignerDialog(QDialog):
         genre = self._current_genre()
         if genre:
             self._edited_specs.pop(genre, None)  # discard edits so defaults are loaded
+            self._persist_specs_to_disk()
             self._populate_spec_fields(genre)
 
     @pyqtSlot()
@@ -511,7 +540,6 @@ class VoiceDesignerDialog(QDialog):
         self._replay_btn.setEnabled(False)
         self._use_btn.setEnabled(False)
         self._reset_btn.setEnabled(False)
-        self._play_sample_btn.setEnabled(False)
 
     # ── Playback ──────────────────────────────────────────────────────────────
 

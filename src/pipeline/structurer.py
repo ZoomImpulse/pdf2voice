@@ -14,6 +14,31 @@ from src.pipeline.preprocessor import preprocess as _preprocess
 # Genre keys exposed to the LLM — must stay in sync with GENRE_PROMPTS in config.py.
 _GENRE_KEYS = list(GENRE_PROMPTS.keys())  # e.g. ["novel", "thriller", ...]
 
+# Maps LLM free-text language responses to ISO-639-1 codes used for anchor filenames.
+_LANG_ALIASES: dict[str, str] = {
+    "de": "de", "german": "de", "deutsch": "de", "ger": "de",
+    "en": "en", "english": "en", "eng": "en",
+    "fr": "fr", "french": "fr", "français": "fr",
+    "es": "es", "spanish": "es", "español": "es",
+    "it": "it", "italian": "it", "italiano": "it",
+    "pt": "pt", "portuguese": "pt", "português": "pt",
+    "nl": "nl", "dutch": "nl",
+    "pl": "pl", "polish": "pl",
+    "ru": "ru", "russian": "ru",
+    "zh": "zh", "chinese": "zh",
+    "ja": "ja", "japanese": "ja",
+}
+
+
+def _normalize_lang(raw: str) -> str:
+    """Return a canonical ISO-639-1 code for *raw*; fall back to the stripped lowercase value."""
+    key = raw.strip().lower()
+    if key in _LANG_ALIASES:
+        return _LANG_ALIASES[key]
+    # Also try just the first word, e.g. "German language" → "german"
+    first_word = key.split()[0] if key else key
+    return _LANG_ALIASES.get(first_word, first_word)
+
 # ── Lightweight metadata-only prompt ─────────────────────────────────────────
 # The structurer no longer sends the full document to the LLM.
 # Text cleaning, chapter detection, and TTS chunking are done by preprocessor.py.
@@ -154,7 +179,7 @@ def structure_content(
     )
     if meta:
         title            = meta.get("title", title) or title
-        language         = meta.get("language", language) or language
+        language         = _normalize_lang(meta.get("language", language) or language)
         genre            = meta.get("genre", "").strip().lower()
         llm_subdiv       = meta.get("subdivision_type", "").strip()
         if llm_subdiv and not subdivision_type:

@@ -230,15 +230,46 @@ def generate_audiobook(
     genre_anchor: Path | None = None
     if book.genre and book.genre in GENRE_PROMPTS:
         lang_code = (book.language or "en").lower().strip()
-        candidate = VOICE_ANCHORS_DIR / f"anchor_{book.genre}_{lang_code}.wav"
-        if not candidate.is_file():
-            # Legacy: anchors without a language suffix (all treated as English)
-            candidate = VOICE_ANCHORS_DIR / f"anchor_{book.genre}.wav"
-        if candidate.is_file():
-            genre_anchor = candidate
+        lang_specific = VOICE_ANCHORS_DIR / f"anchor_{book.genre}_{lang_code}.wav"
+        if lang_specific.is_file():
+            genre_anchor = lang_specific
+        else:
+            # Legacy: anchor without a language suffix (English fallback only)
+            legacy = VOICE_ANCHORS_DIR / f"anchor_{book.genre}.wav"
+            if legacy.is_file():
+                if log_cb:
+                    log_cb(
+                        f"Voice Anchor: No language-specific anchor found for "
+                        f"'{book.genre}' ({lang_code}) — falling back to legacy "
+                        f"'{legacy.name}'. Consider creating a '{lang_code}' anchor "
+                        f"in the Voice Designer."
+                    )
+                genre_anchor = legacy
 
-    if session and session.anchor_available():
-        anchor_path: Path | None = Path(session.anchor_path)  # type: ignore[arg-type]
+    # If a session anchor exists, only reuse it when it matches the expected
+    # language-specific anchor (or no language-specific anchor exists yet).
+    # This prevents a stale English session anchor from overriding a newly
+    # created German genre anchor.
+    session_anchor_path: Path | None = (
+        Path(session.anchor_path)  # type: ignore[arg-type]
+        if session and session.anchor_available()
+        else None
+    )
+    if (
+        session_anchor_path is not None
+        and genre_anchor is not None
+        and session_anchor_path.resolve() != genre_anchor.resolve()
+    ):
+        # Genre anchor has changed (e.g. language-specific one now available).
+        if log_cb:
+            log_cb(
+                f"Voice Anchor: Session anchor '{session_anchor_path.name}' replaced "
+                f"by genre anchor '{genre_anchor.name}' (language: {book.language or 'en'})."
+            )
+        session_anchor_path = None  # force use of genre_anchor below
+
+    if session_anchor_path is not None:
+        anchor_path: Path | None = session_anchor_path
         if log_cb:
             log_cb(f"Voice Anchor: Reusing saved anchor ({anchor_path.name})")
         if anchor_cb:
@@ -246,7 +277,10 @@ def generate_audiobook(
     elif genre_anchor is not None:
         anchor_path = genre_anchor
         if log_cb:
-            log_cb(f"Voice Anchor: Using genre anchor for '{book.genre}'")
+            log_cb(
+                f"Voice Anchor: Using genre anchor '{anchor_path.name}' "
+                f"(genre: {book.genre}, language: {book.language or 'en'})"
+            )
         if anchor_cb:
             anchor_cb(100.0)
         if session:
@@ -759,8 +793,14 @@ def _load_anchor_text(anchor_path: Path) -> str:
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _chapter_title_text(index: int, title: str, subdivision_type: str) -> str:
-    label = f"{subdivision_type} {index}"
-    return f"{label} - {title}" if title.strip() else label
+    label = f"{subdivision_type} {index}."
+    if title.strip():
+        # Ensure the title ends with sentence-final punctuation so TTS pauses correctly.
+        t = title.strip()
+        if t and t[-1] not in ".!?":
+            t += "."
+        return f"{label} {t}"
+    return label
 
 
 def _normalize_rms(wav: np.ndarray, target_rms: float = 0.08) -> np.ndarray:

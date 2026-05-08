@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -34,7 +35,7 @@ class _ExpandableChapterCard(QFrame):
 
     clicked_sig   = pyqtSignal(int, str)
     regen_clicked = pyqtSignal(int)
-    edit_saved    = pyqtSignal(int, str)
+    edit_saved    = pyqtSignal(int, str, str)   # index, new_title, new_text
     delete_clicked = pyqtSignal(int)
 
     def __init__(self, index: int, title: str, parent=None) -> None:
@@ -48,6 +49,7 @@ class _ExpandableChapterCard(QFrame):
         self._subdivision   = ""
         self._announcement  = ""
         self._text_edit: QTextEdit | None = None
+        self._title_edit: QLineEdit | None = None
         self._char_lbl:  QLabel | None = None
 
         self.setObjectName("exp-chapter-card")
@@ -283,6 +285,14 @@ class _ExpandableChapterCard(QFrame):
         hint.setWordWrap(True)
         self._content_layout.addWidget(hint)
 
+        # Title field
+        title_lbl = QLabel("Chapter title:")
+        title_lbl.setObjectName("preview-meta")
+        self._content_layout.addWidget(title_lbl)
+        self._title_edit = QLineEdit(self._title)
+        self._title_edit.setObjectName("vd-spec-field")
+        self._content_layout.addWidget(self._title_edit)
+
         self._text_edit = QTextEdit()
         self._text_edit.setObjectName("chapter-text-edit")
         self._text_edit.setPlainText("\n\n".join(self._chunks))
@@ -319,9 +329,14 @@ class _ExpandableChapterCard(QFrame):
     def _save_edit(self) -> None:
         if self._text_edit is None:
             return
+        new_title = (self._title_edit.text().strip() if self._title_edit else self._title) or self._title
         text = self._text_edit.toPlainText().strip()
         self._in_edit_mode = False
-        self.edit_saved.emit(self._index, text)
+        # Update displayed title immediately
+        self._title = new_title
+        short = (new_title[:52] + "\u2026") if len(new_title) > 53 else new_title
+        self._title_lbl.setText(short)
+        self.edit_saved.emit(self._index, new_title, text)
         self._render_read_only()
 
     # ── Helpers ───────────────────────────────────────────────────────
@@ -381,7 +396,7 @@ class ChapterSection(QFrame):
 
     chapter_selected          = pyqtSignal(int, str)
     chapter_regen_requested   = pyqtSignal(int)
-    chapter_edit_saved        = pyqtSignal(int, str)
+    chapter_edit_saved        = pyqtSignal(int, str, str)   # index, new_title, new_text
     chapter_delete_requested  = pyqtSignal(int)
 
     def __init__(self, parent=None) -> None:
