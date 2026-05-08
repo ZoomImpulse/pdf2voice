@@ -59,19 +59,41 @@ def _strip_ansi(text: str) -> str:
 
 def _detect_cuda_version() -> str | None:
     """Return CUDA version string like '12.4', or None if no NVIDIA GPU found."""
+
+    # --- nvidia-smi candidates (PATH + common Windows install locations) ---
+    smi_candidates = ["nvidia-smi"]
+    if sys.platform == "win32":
+        smi_candidates += [
+            r"C:\Windows\System32\nvidia-smi.exe",
+            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+        ]
+
+    for smi in smi_candidates:
+        try:
+            result = subprocess.run(
+                [smi], capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                continue
+            clean = _strip_ansi(result.stdout)
+            match = re.search(r"CUDA Version:\s*(\d+\.\d+)", clean)
+            if match:
+                return match.group(1)
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+            continue
+
+    # --- nvcc fallback ---
     try:
         result = subprocess.run(
-            ["nvidia-smi"],
-            capture_output=True, text=True, timeout=5,
+            ["nvcc", "--version"], capture_output=True, text=True, timeout=5,
         )
-        if result.returncode != 0:
-            return None
-        clean = _strip_ansi(result.stdout)
-        match = re.search(r"CUDA Version:\s*(\d+\.\d+)", clean)
-        if match:
-            return match.group(1)
+        if result.returncode == 0:
+            match = re.search(r"release (\d+\.\d+)", result.stdout)
+            if match:
+                return match.group(1)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
+
     return None
 
 
@@ -88,10 +110,17 @@ def _cuda_tag(cuda_ver: str) -> str:
     return "cu118"  # CUDA 11.8 — lowest supported
 
 
+# Pinned to the version fish-speech 2.0.0 requires.
+_TORCH_VERSION = "2.8.0"
+_TORCHVISION_VERSION = "0.23.0"   # must match torch version
+_TORCHAUDIO_VERSION = "2.8.0"     # must match torch version
+
+
 def _install_torch(cuda_ver: str | None) -> str:
-    """Uninstall existing torch/torchaudio and reinstall with the correct CUDA build."""
+    """Uninstall existing torch/torchvision/torchaudio and reinstall with the correct build."""
     subprocess.run(
-        [str(_venv_python()), "-m", "pip", "uninstall", "torch", "torchaudio", "-y"],
+        [str(_venv_python()), "-m", "pip", "uninstall",
+         "torch", "torchvision", "torchaudio", "-y"],
         capture_output=True,
     )
 
@@ -99,7 +128,9 @@ def _install_torch(cuda_ver: str | None) -> str:
         _print_warn("No NVIDIA GPU found — installing PyTorch + torchaudio (CPU).")
         subprocess.check_call([
             str(_venv_python()), "-m", "pip", "install", "--quiet",
-            "torch", "torchaudio",
+            f"torch=={_TORCH_VERSION}",
+            f"torchvision=={_TORCHVISION_VERSION}",
+            f"torchaudio=={_TORCHAUDIO_VERSION}",
         ])
         return "cpu"
 
@@ -108,9 +139,12 @@ def _install_torch(cuda_ver: str | None) -> str:
     _print(f"CUDA {cuda_ver} detected → installing PyTorch + torchaudio ({tag}) ...")
     subprocess.check_call([
         str(_venv_python()), "-m", "pip", "install", "--quiet",
-        "torch", "torchaudio", "--index-url", index_url,
+        f"torch=={_TORCH_VERSION}",
+        f"torchvision=={_TORCHVISION_VERSION}",
+        f"torchaudio=={_TORCHAUDIO_VERSION}",
+        "--index-url", index_url,
     ])
-    _print_ok(f"PyTorch + torchaudio ({tag}) installed.")
+    _print_ok(f"PyTorch {_TORCH_VERSION} + torchaudio + torchvision ({tag}) installed.")
     return tag
 
 

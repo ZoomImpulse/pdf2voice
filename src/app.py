@@ -710,6 +710,7 @@ class Pdf2VoiceApp(QMainWindow):
         w.finished.connect(self._on_worker_finished)
         w.stage_status.connect(self._pipeline_panel.set_status)
         w.chunk_step.connect(self._pipeline_panel.set_chunk_step)
+        w.paused.connect(self._on_worker_paused)
 
     @pyqtSlot(int, int, int)
     def _on_stage_progress(self, stage: int, value: int, maximum: int) -> None:
@@ -820,8 +821,23 @@ class Pdf2VoiceApp(QMainWindow):
     def _toggle_pause(self) -> None:
         if self._worker:
             paused = self._worker.toggle_pause()
-            self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
-            self._status_lbl.setText("Paused" if paused else "Running …")
+            if paused:
+                # Requesting pause — worker still finishing the current chunk.
+                # Disable the button until the worker actually enters the wait loop.
+                self._pause_btn.setEnabled(False)
+                self._pause_btn.setText("⏸  Pause")
+                self._status_lbl.setText("Pausing…")
+            else:
+                # Resuming — takes effect immediately in the worker thread.
+                self._pause_btn.setText("⏸  Pause")
+                self._status_lbl.setText("Running …")
+
+    @pyqtSlot()
+    def _on_worker_paused(self) -> None:
+        """Called when the worker thread has actually entered its pause wait loop."""
+        self._pause_btn.setEnabled(True)
+        self._pause_btn.setText("▶  Resume")
+        self._status_lbl.setText("Paused")
 
     def _cancel_pipeline(self) -> None:
         reply = QMessageBox.question(

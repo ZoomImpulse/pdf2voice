@@ -33,6 +33,7 @@ class PipelineWorker(QThread):
     failed           = pyqtSignal(str)
     stage_status     = pyqtSignal(str)            # free-form status override (e.g. per-chapter adapt)
     chunk_step       = pyqtSignal(int, int)        # step, total_steps within current chunk
+    paused           = pyqtSignal()               # emitted when thread actually enters the pause wait loop
     def __init__(
         self,
         pdf_path: str,
@@ -46,10 +47,11 @@ class PipelineWorker(QThread):
         self._force_fresh  = force_fresh
         self._force_resume = force_resume
 
-        self._confirm_event = threading.Event()
-        self._cancelled     = False
-        self._paused        = False
-        self._current_stage = 0
+        self._confirm_event    = threading.Event()
+        self._cancelled        = False
+        self._paused           = False
+        self._is_paused_waiting = False
+        self._current_stage    = 0
 
     # ── Public control interface ───────────────────────────────────────
 
@@ -80,8 +82,13 @@ class PipelineWorker(QThread):
     def _check_cancel(self) -> None:
         if self._cancelled:
             raise _Cancelled
+        if self._paused and not self._is_paused_waiting:
+            self._is_paused_waiting = True
+            self.paused.emit()
         while self._paused and not self._cancelled:
             self.msleep(150)
+        if self._is_paused_waiting:
+            self._is_paused_waiting = False
         if self._cancelled:
             raise _Cancelled
 
